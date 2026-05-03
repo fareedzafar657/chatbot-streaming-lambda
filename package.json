@@ -1,0 +1,11 @@
+{
+  "name": "chatbot-streaming-lambda",
+  "version": "1.0.0",
+  "main": "src/index.js",
+  "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.682.0",
+    "@aws-sdk/client-dynamodb": "^3.682.0",
+    "@aws-sdk/lib-dynamodb": "^3.682.0",
+    "aws-jwt-verify": "^4.0.1"
+  }
+}

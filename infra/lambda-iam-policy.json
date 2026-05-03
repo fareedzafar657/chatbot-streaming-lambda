@@ -1,0 +1,48 @@
+{
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Sid": "BedrockInvokeStreaming",
+        "Effect": "Allow",
+        "Action": [
+          "bedrock:InvokeModelWithResponseStream",
+          "bedrock:InvokeModel"
+        ],
+        "Resource": [
+          "arn:aws:bedrock:us-east-1::foundation-model/anthropic.claude-3-5-sonnet-20241022-v2:0",
+          "arn:aws:bedrock:us-east-1::foundation-model/us.anthropic.claude-3-5-sonnet-20241022-v2:0"
+        ]
+      },
+      {
+        "Sid": "DynamoDBAccess",
+        "Effect": "Allow",
+        "Action": [
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Query",
+          "dynamodb:BatchGetItem",
+          "dynamodb:TransactWriteItems"
+        ],
+        "Resource": [
+          "arn:aws:dynamodb:us-east-1:*:table/chatbot_messages",
+          "arn:aws:dynamodb:us-east-1:*:table/chatbot_messages/index/*",
+          "arn:aws:dynamodb:us-east-1:*:table/chatbot_branches",
+          "arn:aws:dynamodb:us-east-1:*:table/chatbot_branches/index/*",
+          "arn:aws:dynamodb:us-east-1:*:table/chatbot_sessions",
+          "arn:aws:dynamodb:us-east-1:*:table/chatbot_sessions/index/*"
+        ]
+      },
+      {
+        "Sid": "CloudWatchLogs",
+        "Effect": "Allow",
+        "Action": [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ],
+        "Resource": "arn:aws:logs:us-east-1:*:log-group:/aws/lambda/chatbot-streaming:*"
+      }
+    ]
+  }

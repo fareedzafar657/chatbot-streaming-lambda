@@ -48,16 +48,13 @@ function parseRequest(event) {
 }
 
 /**
- * Build CORS + content-type headers for streaming responses.
+ * Build content-type headers for streaming responses.
  * The Function URL handler reads these from httpResponseMetadata.
  */
-function streamingHeaders(corsOrigin = '*') {
+function streamingHeaders() {
   return {
     'Content-Type': 'application/x-ndjson',
     'X-Content-Type-Options': 'nosniff',
-    'Access-Control-Allow-Origin': corsOrigin,
-    'Access-Control-Allow-Headers': 'Authorization, Content-Type',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
     'Cache-Control': 'no-cache, no-store',
   };
 }

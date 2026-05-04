@@ -1,0 +1,203 @@
+# .github/workflows/deploy.yml
+#
+# ─── WHAT IS THIS FILE? ───────────────────────────────────────────────────────
+# This is a GitHub Actions workflow. GitHub Actions is a CI/CD platform built
+# into GitHub. Whenever you push code, GitHub reads this file and runs the
+# steps you define — automatically, on GitHub's servers, for free.
+#
+# CI/CD stands for:
+#   CI = Continuous Integration  → automatically test code on every push
+#   CD = Continuous Deployment   → automatically deploy code on every push
+#
+# ─── HOW IT WORKS ────────────────────────────────────────────────────────────
+# 1. You push code to GitHub
+# 2. GitHub sees this file in .github/workflows/
+# 3. GitHub spins up a fresh Ubuntu server (called a "runner")
+# 4. The runner runs every step in order
+# 5. If any step fails, the whole pipeline stops and you get an email
+#
+# ─── BRANCH STRATEGY ─────────────────────────────────────────────────────────
+# dev branch   → deploys to Lambda (your only environment for now)
+# main branch  → same, but represents "production-ready" code
+#
+# Typical workflow:
+#   1. Make changes locally
+#   2. Push to dev → pipeline runs → Lambda is updated → test it
+#   3. When happy → merge dev into main → pipeline runs again
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Deploy Streaming Lambda
+
+# ─── TRIGGERS ────────────────────────────────────────────────────────────────
+# "on" defines what events trigger this workflow.
+# We only care about pushes to dev or main branches.
+# Pull requests to main also trigger a test run (without deploying).
+on:
+  push:
+    branches:
+      - main
+      - dev
+  pull_request:
+    branches:
+      - main
+
+# ─── ENVIRONMENT VARIABLES ───────────────────────────────────────────────────
+# These are available to all jobs in this workflow.
+# ${{ secrets.X }} reads from GitHub repository secrets (set in repo settings).
+# Never hardcode AWS keys here — always use secrets.
+env:
+  AWS_REGION: us-east-1
+  LAMBDA_FUNCTION_NAME: node-streaming-test
+  NODE_VERSION: '22'
+
+# ─── JOBS ────────────────────────────────────────────────────────────────────
+# A workflow has one or more jobs. Jobs run in parallel by default.
+# We have two jobs: "test" and "deploy".
+# "deploy" depends on "test" — so test must pass before deploy runs.
+jobs:
+
+  # ── JOB 1: TEST ─────────────────────────────────────────────────────────────
+  # Runs on every push and every pull request.
+  # Checks that the code is valid before we deploy.
+  test:
+    name: Test
+    # "runs-on" is the type of machine GitHub spins up for this job.
+    # ubuntu-latest is the standard — a fresh Linux VM every time.
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Check out your code onto the runner
+      # Without this, the runner has no files to work with.
+      - name: Checkout code
+        uses: actions/checkout@v4
+        # "uses" means "use a pre-built GitHub Action from the marketplace"
+        # actions/checkout@v4 is the official action to clone your repo
+
+      # Step 2: Set up Node.js on the runner
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          # cache: npm tells GitHub to cache node_modules between runs
+          # This makes subsequent runs faster (skips re-downloading packages)
+          cache: 'npm'
+
+      # Step 3: Install dependencies
+      # --omit=dev skips devDependencies (eslint etc.) — not needed for tests
+      - name: Install dependencies
+        run: npm ci
+        # "run" executes a shell command on the runner
+        # npm ci is like npm install but faster and stricter (uses package-lock.json)
+
+      # Step 4: Lint the code
+      # Catches syntax errors and bad patterns before deploying
+      - name: Lint
+        run: npm run lint --if-present
+        # --if-present means "only run if this script exists in package.json"
+        # Won't fail if you haven't set up a lint script yet
+
+      # Step 5: Validate that required files exist
+      # A simple sanity check — make sure the entry point is there
+      - name: Validate structure
+        run: |
+          echo "Checking required files exist..."
+          test -f src/index.js        || (echo "Missing src/index.js" && exit 1)
+          test -f src/config.js       || (echo "Missing src/config.js" && exit 1)
+          test -f package.json        || (echo "Missing package.json" && exit 1)
+          echo "All required files present ✓"
+
+  # ── JOB 2: DEPLOY ───────────────────────────────────────────────────────────
+  # Only runs when pushing to main or dev branches (not on pull requests).
+  # Depends on the test job — if tests fail, this never runs.
+  deploy:
+    name: Deploy to AWS Lambda
+    runs-on: ubuntu-latest
+
+    # "needs: test" means this job waits for test to complete successfully
+    needs: test
+
+    # "if" condition — only deploy on pushes (not pull requests)
+    # github.event_name is the type of event that triggered the workflow
+    if: github.event_name == 'push'
+
+    steps:
+      # Step 1: Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Set up Node.js with caching
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      # Step 3: Install ONLY production dependencies
+      # We don't want devDependencies in our Lambda zip (smaller = faster cold start)
+      - name: Install production dependencies
+        run: npm ci --omit=dev
+
+      # Step 4: Create the deployment zip
+      # We use zip directly (available on ubuntu-latest)
+      # The zip must contain: src/, node_modules/, package.json at the ROOT
+      - name: Create deployment zip
+        run: |
+          echo "Creating deployment package..."
+          zip -r function.zip src/ node_modules/ package.json -q
+          echo "Zip size: $(du -sh function.zip | cut -f1)"
+
+      # Step 5: Configure AWS credentials
+      # This action reads your GitHub secrets and sets up AWS CLI authentication
+      # It sets the AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY env vars automatically
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # Step 6: Deploy to Lambda
+      # Uploads the zip to Lambda using AWS CLI
+      - name: Deploy to Lambda
+        run: |
+          echo "Deploying to Lambda: ${{ env.LAMBDA_FUNCTION_NAME }}..."
+          aws lambda update-function-code \
+            --function-name ${{ env.LAMBDA_FUNCTION_NAME }} \
+            --zip-file fileb://function.zip \
+            --region ${{ env.AWS_REGION }}
+          echo "Deploy complete ✓"
+
+      # Step 7: Wait for Lambda to finish updating
+      # Lambda needs a moment to process the new code before it's live
+      - name: Wait for Lambda update
+        run: |
+          echo "Waiting for Lambda to be ready..."
+          aws lambda wait function-updated \
+            --function-name ${{ env.LAMBDA_FUNCTION_NAME }} \
+            --region ${{ env.AWS_REGION }}
+          echo "Lambda is ready ✓"
+
+      # Step 8: Verify deployment
+      # Quick smoke test — checks the Lambda configuration looks right
+      - name: Verify deployment
+        run: |
+          echo "Verifying deployment..."
+          aws lambda get-function-configuration \
+            --function-name ${{ env.LAMBDA_FUNCTION_NAME }} \
+            --region ${{ env.AWS_REGION }} \
+            --query '{Handler:Handler,Runtime:Runtime,CodeSize:CodeSize,LastModified:LastModified}' \
+            --output table
+          echo "Verification complete ✓"
+
+      # Step 9: Add a deployment summary to the GitHub Actions UI
+      # This shows up in the workflow run summary page on GitHub
+      - name: Deployment summary
+        run: |
+          echo "## Deployment Summary 🚀" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "| --- | --- |" >> $GITHUB_STEP_SUMMARY
+          echo "| Function | ${{ env.LAMBDA_FUNCTION_NAME }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | ${{ github.ref_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Triggered by | ${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Time | $(date -u) |" >> $GITHUB_STEP_SUMMARY

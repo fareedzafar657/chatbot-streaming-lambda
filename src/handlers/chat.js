@@ -1,8 +1,10 @@
 'use strict';
 
-const { streamBedrockResponse }     = require('../services/bedrock');
-const db                            = require('../services/dynamodb');
-const config                        = require('../config');
+const { streamBedrockResponse }   = require('../services/bedrock');
+const { streamAnthropicResponse } = require('../services/anthropic');
+const { streamGeminiResponse }    = require('../services/gemini');
+const db                          = require('../services/dynamodb');
+const config                      = require('../config');
 
 /**
  * Core streaming handler — orchestrates the full chat turn:
@@ -23,7 +25,7 @@ const config                        = require('../config');
  * @param {string|null} params.branchId  - null → use session's activeBranchId
  * @param {string} params.userId         - from Cognito JWT sub
  */
-async function handleChatStream(transport, { prompt, sessionId, branchId, userId }) {
+async function handleChatStream(transport, { prompt, sessionId, branchId, userId, apiKey, provider, model, systemPrompt }) {
 
   // ── 1. Resolve session + branch ──────────────────────────────────────────
   const session = await db.getOrCreateSession(sessionId, userId);
@@ -63,14 +65,42 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
   // We pass the prior history + the prompt separately to streamBedrockResponse
   const priorHistory = history.filter(m => m.msgId !== userMsg.msgId);
 
-  // ── 4. Stream Bedrock response ───────────────────────────────────────────
+  // ── 4. Select provider and stream response ───────────────────────────────
+
+  // Security: K-AI Bedrock path must always use Nova Micro.
+  // Clamp model to null so Bedrock falls back to config.bedrock.modelId.
+  // BYOK paths (apiKey present) honour the user's model — their key, their cost.
+  if (!apiKey && !provider && model) {
+    console.warn('[handleChatStream] blocked Bedrock model override attempt:', model);
+  }
+  const safeModel = (!apiKey && !provider) ? null : model;
+
+  const streamOptions = {
+    modelId:      safeModel    || undefined,
+    systemPrompt: systemPrompt || undefined,
+    maxTokens:    config.bedrock.maxTokens,
+    apiKey,
+  };
+
+  // Resolve the modelId that will actually be used — saved to DynamoDB for usage tracking
+  const resolvedModelId =
+    safeModel                      ? safeModel :
+    provider === 'anthropic'       ? 'claude-haiku-4-5-20251001' :
+    provider === 'gemini'          ? 'gemini-2.5-flash' :
+    config.bedrock.modelId;
+
+  const stream =
+    apiKey && provider === 'anthropic' ? streamAnthropicResponse(priorHistory, prompt, streamOptions) :
+    apiKey && provider === 'gemini'    ? streamGeminiResponse(priorHistory, prompt, streamOptions) :
+    streamBedrockResponse(priorHistory, prompt, streamOptions);
+
   let fullText     = '';
   let inputTokens  = 0;
   let outputTokens = 0;
   let hadError     = false;
 
   try {
-    for await (const chunk of streamBedrockResponse(priorHistory, prompt)) {
+    for await (const chunk of stream) {
 
       if (chunk.type === 'delta') {
         fullText += chunk.text;
@@ -104,6 +134,7 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
       parentMsgId: userMsg.msgId,
       inputTokens,
       outputTokens,
+      modelId: resolvedModelId,
     });
 
     transport.send({

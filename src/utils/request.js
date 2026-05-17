@@ -6,9 +6,13 @@
  *
  * Expected JSON body:
  * {
- *   "prompt":     string   (required) — the user's message
- *   "sessionId":  string   (required) — client-managed session identifier
- *   "branchId":   string   (optional) — if omitted, uses session's activeBranchId
+ *   "prompt":       string   (required) — the user's message
+ *   "sessionId":    string   (required) — client-managed session identifier
+ *   "branchId":     string   (optional) — if omitted, uses session's activeBranchId
+ *   "apiKey":       string   (optional) — user's own provider API key
+ *   "provider":     string   (optional) — "anthropic" | "gemini"; omit for Bedrock
+ *   "model":        string   (optional) — model ID; omit for provider default
+ *   "systemPrompt": string   (optional) — overrides the default system prompt
  * }
  */
 function parseRequest(event) {
@@ -30,7 +34,7 @@ function parseRequest(event) {
     throw Object.assign(new Error('Invalid JSON in request body'), { statusCode: 400 });
   }
 
-  const { prompt, sessionId, branchId } = body;
+  const { prompt, sessionId, branchId, apiKey, provider, model, systemPrompt } = body;
 
   if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
     throw Object.assign(new Error('prompt is required and must be a non-empty string'), { statusCode: 400 });
@@ -41,9 +45,13 @@ function parseRequest(event) {
   }
 
   return {
-    prompt:    prompt.trim(),
-    sessionId: sessionId.trim(),
-    branchId:  branchId?.trim() || null,
+    prompt:       prompt.trim(),
+    sessionId:    sessionId.trim(),
+    branchId:     branchId?.trim()     || null,
+    apiKey:       typeof apiKey       === 'string' && apiKey.trim()       ? apiKey.trim()       : null,
+    provider:     typeof provider     === 'string' && provider.trim()     ? provider.trim()     : null,
+    model:        typeof model        === 'string' && model.trim()        ? model.trim()        : null,
+    systemPrompt: typeof systemPrompt === 'string' && systemPrompt.trim() ? systemPrompt.trim() : null,
   };
 }
 

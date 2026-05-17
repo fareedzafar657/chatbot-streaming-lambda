@@ -1,182 +1,108 @@
-# Chatbot Streaming Lambda
+# Local Development
 
-Node.js v22 Lambda with Function URL streaming, Amazon Bedrock (Claude 3.5 Sonnet),
-Cognito JWT auth, and a DynamoDB branch-tree conversation model.
+Running the Lambda locally for frontend development — no Docker, no SAM, full NDJSON streaming.
+
+## How it works
+
+`scripts/local-server.js` is a plain Node.js HTTP server that calls the same handler logic as the Lambda (`handleChatStream`) but skips the `awslambda` runtime globals. It exposes an identical interface to the Lambda Function URL:
+
+```
+POST http://localhost:4000
+Content-Type: application/json
+Authorization: Bearer <token>   ← omit when AUTH_BYPASS=true
+
+{"prompt":"...", "sessionId":"...", "branchId":"..."}
+```
+
+Response: NDJSON stream (same wire format as production).
+
+## Prerequisites
+
+- Node.js 22+
+- AWS credentials configured (`aws configure`) with access to Bedrock and DynamoDB
+- DynamoDB tables already created (see `infra/dynamodb-schema.md`)
 
 ## Project structure
 
+| Path | Responsibility |
+|---|---|
+| `src/handlers/chat.js` | Core request handler — provider selection, history, streaming |
+| `src/services/bedrock.js` | AWS Bedrock streaming (default provider) |
+| `src/services/anthropic.js` | Anthropic API streaming (BYOK) |
+| `src/services/gemini.js` | Google Gemini streaming (BYOK) |
+| `src/services/dynamodb.js` | Session/message persistence + usage stats |
+| `src/utils/request.js` | Request parsing and validation |
+| `src/utils/transport.js` | NDJSON write abstraction (Lambda URL + local server) |
+| `src/config.js` | Environment-variable config |
+| `scripts/local-server.js` | Local HTTP dev server (wraps handler, no SAM/Docker needed) |
+| `infra/` | CloudFormation templates and DynamoDB schema |
+
+## Start the server
+
+```powershell
+$env:AUTH_BYPASS="true"; node scripts/local-server.js
 ```
-src/
-  index.js                  ← Lambda entry point (thin: auth + transport + route)
-  config.js                 ← All env vars in one place
-  middleware/
-    auth.js                 ← Cognito JWT verification
-  handlers/
-    chat.js                 ← Core business logic (transport-agnostic)
-  services/
-    bedrock.js              ← Bedrock ConverseStream wrapper
-    dynamodb.js             ← All DB reads/writes (messages, branches, sessions)
-  utils/
-    transport.js            ← Transport abstraction (FunctionUrl / WebSocket)
-    request.js              ← Request parsing + response headers
-infra/
-  dynamodb-schema.md        ← Table schemas, GSIs, AWS CLI commands
-  lambda-iam-policy.json    ← Minimal IAM policy for the Lambda role
-scripts/
-  local-test.js             ← Local invocation harness (no deploy needed)
+
+Custom port:
+
+```powershell
+$env:AUTH_BYPASS="true"; $env:PORT="4001"; node scripts/local-server.js
+```
+
+Expected output:
+
+```
+Local Lambda server running at http://localhost:4000
+AUTH_BYPASS=true
 ```
 
 ## Environment variables
 
-| Variable                  | Required | Default                                          | Description                         |
-|---------------------------|----------|--------------------------------------------------|-------------------------------------|
-| `AWS_REGION`              | yes      | `us-east-1`                                      | AWS region                          |
-| `BEDROCK_MODEL_ID`        | no       | `us.anthropic.claude-3-5-sonnet-20241022-v2:0`   | Bedrock model ID                    |
-| `BEDROCK_MAX_TOKENS`      | no       | `4096`                                           | Max tokens in response              |
-| `SYSTEM_PROMPT`           | no       | (see config.js)                                  | System prompt for all conversations |
-| `COGNITO_USER_POOL_ID`    | yes (prod)| —                                               | e.g. `us-east-1_XXXXXXXXX`         |
-| `COGNITO_CLIENT_ID`       | yes (prod)| —                                               | Cognito app client ID               |
-| `DYNAMO_MESSAGES_TABLE`   | no       | `chatbot_messages`                               | DynamoDB messages table name        |
-| `DYNAMO_BRANCHES_TABLE`   | no       | `chatbot_branches`                               | DynamoDB branches table name        |
-| `DYNAMO_SESSIONS_TABLE`   | no       | `chatbot_sessions`                               | DynamoDB sessions table name        |
-| `HISTORY_MAX_MESSAGES`    | no       | `50`                                             | Hard cap on messages sent to Bedrock|
-| `HISTORY_MAX_TOKEN_BUDGET`| no       | `60000`                                          | Approx token budget for history     |
-| `CORS_ORIGIN`             | no       | `*`                                              | Set to your frontend domain in prod |
-| `NODE_ENV`                | no       | —                                                | Set `production` to enable strict checks |
+| Variable | Default | Notes |
+|---|---|---|
+| `AUTH_BYPASS` | `false` | Set `true` to skip Cognito JWT — required for local dev |
+| `PORT` | `4000` | HTTP port |
+| `AWS_REGION` | `us-east-1` | Must match where your DynamoDB tables live |
+| `BEDROCK_MODEL_ID` | `amazon.nova-micro-v1:0` | Override to use a different model |
+| `CORS_ORIGIN` | `*` | Lock down to your frontend origin if needed |
 
-## Deploy steps
+All other variables from the main README (`DYNAMO_*`, `SYSTEM_PROMPT`, etc.) work here too.
 
-### 1. Create DynamoDB tables
-```bash
-# See infra/dynamodb-schema.md for full AWS CLI commands
-# Quick version:
-aws dynamodb create-table --cli-input-json file://infra/messages-table.json
-```
+## Point your frontend at it
 
-### 2. Install dependencies
-```bash
-npm install
-```
+Replace the Lambda Function URL with `http://localhost:4000` in your frontend config. No other changes — the request shape and NDJSON stream format are identical to production.
 
-### 3. Create the Lambda function
-```bash
-# Zip it
-zip -r function.zip src/ node_modules/ package.json
+If your frontend runs on a different port (e.g. `localhost:5173`), CORS is open by default (`*`), so cross-origin requests will work without any extra config.
 
-# Create Lambda (first time)
-aws lambda create-function \
-  --function-name chatbot-streaming \
-  --runtime nodejs22.x \
-  --role arn:aws:iam::YOUR_ACCOUNT:role/chatbot-lambda-role \
-  --handler src/index.handler \
-  --zip-file fileb://function.zip \
-  --timeout 120 \
-  --memory-size 512 \
-  --environment "Variables={
-    NODE_ENV=production,
-    COGNITO_USER_POOL_ID=us-east-1_XXXXXXXX,
-    COGNITO_CLIENT_ID=XXXXXXXXXX,
-    BEDROCK_MODEL_ID=us.anthropic.claude-3-5-sonnet-20241022-v2:0,
-    CORS_ORIGIN=https://yourapp.com
-  }"
+## Using your own API key (Anthropic / Gemini)
 
-# Update function (subsequent deploys)
-aws lambda update-function-code \
-  --function-name chatbot-streaming \
-  --zip-file fileb://function.zip
-```
+Skip Bedrock entirely by passing `apiKey`, `provider`, and optionally `model` in the request body:
 
-### 4. Enable Function URL with streaming
-```bash
-aws lambda create-function-url-config \
-  --function-name chatbot-streaming \
-  --auth-type NONE \
-  --invoke-mode RESPONSE_STREAM
-
-# Allow public access (auth is handled in-Lambda via Cognito JWT)
-aws lambda add-permission \
-  --function-name chatbot-streaming \
-  --statement-id FunctionURLAllowPublicAccess \
-  --action lambda:InvokeFunctionUrl \
-  --principal "*" \
-  --function-url-auth-type NONE
-```
-
-### 5. Apply IAM policy to Lambda role
-```bash
-aws iam put-role-policy \
-  --role-name chatbot-lambda-role \
-  --policy-name chatbot-lambda-policy \
-  --policy-document file://infra/lambda-iam-policy.json
-```
-
-### 6. Test locally
-```bash
-SKIP_AUTH=true node scripts/local-test.js "What is the capital of Pakistan?"
-```
-
-## Wire format (NDJSON stream)
-
-Each line is a JSON object:
-
-```
-{"type":"metadata","sessionId":"...","branchId":"..."}
-{"type":"userMessage","msgId":"msg_abc123"}
-{"type":"delta","text":"Hello"}
-{"type":"delta","text":", how can I help?"}
-{"type":"done","msgId":"msg_xyz789","state":"active","inputTokens":42,"outputTokens":17}
-```
-
-Error lines (stream stays open, then closes):
-```
-{"type":"error","message":"Unauthorized: token expired"}
-```
-
-## Frontend consumption (fetch + ReadableStream)
-
-```javascript
-const response = await fetch(LAMBDA_URL, {
-  method: 'POST',
-  headers: {
-    'Content-Type': 'application/json',
-    'Authorization': `Bearer ${cognitoAccessToken}`,
-  },
-  body: JSON.stringify({ prompt, sessionId, branchId }),
-});
-
-const reader = response.body.getReader();
-const decoder = new TextDecoder();
-let buffer = '';
-
-while (true) {
-  const { done, value } = await reader.read();
-  if (done) break;
-
-  buffer += decoder.decode(value, { stream: true });
-  const lines = buffer.split('\n');
-  buffer = lines.pop(); // keep incomplete line
-
-  for (const line of lines) {
-    if (!line.trim()) continue;
-    const event = JSON.parse(line);
-
-    if (event.type === 'delta')       appendToken(event.text);
-    if (event.type === 'metadata')    setIds(event.sessionId, event.branchId);
-    if (event.type === 'userMessage') setUserMsgId(event.msgId);
-    if (event.type === 'done')        onStreamComplete(event);
-    if (event.type === 'error')       showError(event.message);
-  }
+```json
+{
+  "prompt": "Hello",
+  "sessionId": "test-session-1",
+  "apiKey": "sk-ant-...",
+  "provider": "anthropic",
+  "model": "claude-haiku-4-5-20251001"
 }
 ```
 
-## Migrating to WebSocket (future)
+Supported providers: `anthropic`, `gemini`. Omit all three to use Bedrock.
 
-1. Add `WebSocketTransport` class to `src/utils/transport.js` (stub already there)
-2. Create a new Lambda entry point (e.g. `src/index-ws.js`) that extracts
-   `connectionId` from the API Gateway event and calls:
-   ```js
-   const transport = createTransport('websocket', { apiGwClient, connectionId });
-   await handleChatStream(transport, { ...parsed, userId });
-   ```
-3. `src/handlers/chat.js` and all services are **unchanged**.
-4. Wire API Gateway WebSocket → the new handler for the `$stream` route.
+## Quick smoke test
+
+```powershell
+$body = '{"prompt":"Say hi","sessionId":"test-1"}'
+Invoke-WebRequest -Uri http://localhost:4000 -Method POST `
+  -ContentType "application/json" -Body $body |
+  Select-Object -ExpandProperty Content
+```
+
+Each line of the response is a JSON object. You should see `metadata` → `userMessage` → `delta` chunks → `done`.
+
+## Why not SAM + Docker?
+
+`sam local start-api` does not support Lambda response streaming (`awslambda.streamifyResponse`). The local server script bypasses that limitation entirely by calling the business logic directly.
+
+The `node-streaming-test.yaml` file is only used for deploying to AWS — it is not needed for local development.

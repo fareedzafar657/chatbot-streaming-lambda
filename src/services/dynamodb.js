@@ -175,6 +175,7 @@ async function saveAssistantMessage({
   parentMsgId,
   inputTokens,
   outputTokens,
+  modelId,
 }) {
   const msgId = `msg_${uuidv4()}`;
   const now = new Date().toISOString();
@@ -199,6 +200,7 @@ async function saveAssistantMessage({
     content,
     state,
     parentMsgId,
+    modelId:      modelId || config.bedrock.modelId,
     inputTokens:  inputTokens  || 0,
     outputTokens: outputTokens || 0,
     createdAt: now,

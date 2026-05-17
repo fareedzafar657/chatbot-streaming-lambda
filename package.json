@@ -8,6 +8,6 @@
     "@aws-sdk/client-dynamodb": "^3.682.0",
     "@aws-sdk/lib-dynamodb": "^3.682.0",
     "@google/genai": "^2.3.0",
-    "aws-jwt-verify": "^4.0.1"
+    "aws-jwt-verify": "^5.1.1"
   }
 }

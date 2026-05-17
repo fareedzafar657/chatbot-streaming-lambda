@@ -41,7 +41,12 @@ async function getOrCreateSession(sessionId, userId) {
     Key: { sessionId },
   }));
 
-  if (existing.Item) return existing.Item;
+  if (existing.Item) {
+    if (existing.Item.userId !== userId) {
+      throw Object.assign(new Error('Forbidden'), { statusCode: 403 });
+    }
+    return existing.Item;
+  }
 
   // New session — create session + trunk branch atomically
   const trunkBranchId = `branch_${uuidv4()}`;
@@ -83,7 +88,7 @@ async function getBranch(branchId) {
     TableName: TABLES.branchesTable,
     Key: { branchId },
   }));
-  if (!res.Item) throw new Error(`Branch not found: ${branchId}`);
+  if (!res.Item) throw new Error('Branch not found');
   return res.Item;
 }
 
@@ -109,19 +114,25 @@ async function forkBranch({ sessionId, parentBranchId, parentMsgId, selectedMsgI
   return branch;
 }
 
+// Returns the TransactWrite Update item for appending a msgId to a branch's selectedMsgIds.
+// Used in both saveUserMessage and saveAssistantMessage transactions.
+function branchAppendTransactItem(branchId, msgId) {
+  return {
+    Update: {
+      TableName: TABLES.branchesTable,
+      Key: { branchId },
+      UpdateExpression: 'SET selectedMsgIds = list_append(if_not_exists(selectedMsgIds, :empty), :ids)',
+      ExpressionAttributeValues: { ':empty': [], ':ids': [msgId] },
+    },
+  };
+}
+
 /**
  * Append a msgId to a branch's selectedMsgIds list.
  */
 async function appendMsgToBranch(branchId, msgId) {
-  await ddb.send(new UpdateCommand({
-    TableName: TABLES.branchesTable,
-    Key: { branchId },
-    UpdateExpression: 'SET selectedMsgIds = list_append(if_not_exists(selectedMsgIds, :empty), :ids)',
-    ExpressionAttributeValues: {
-      ':empty': [],
-      ':ids': [msgId],
-    },
-  }));
+  const { Update } = branchAppendTransactItem(branchId, msgId);
+  await ddb.send(new UpdateCommand(Update));
 }
 
 // ─── Messages ────────────────────────────────────────────────────────────────
@@ -149,15 +160,7 @@ async function saveUserMessage({ sessionId, branchId, content, userId }) {
   await ddb.send(new TransactWriteCommand({
     TransactItems: [
       { Put: { TableName: TABLES.messagesTable, Item: item } },
-      {
-        Update: {
-          TableName: TABLES.branchesTable,
-          Key: { branchId },
-          UpdateExpression:
-            'SET selectedMsgIds = list_append(if_not_exists(selectedMsgIds, :empty), :ids)',
-          ExpressionAttributeValues: { ':empty': [], ':ids': [msgId] },
-        },
-      },
+      branchAppendTransactItem(branchId, msgId),
     ],
   }));
 
@@ -176,6 +179,7 @@ async function saveAssistantMessage({
   inputTokens,
   outputTokens,
   modelId,
+  userId,
 }) {
   const msgId = `msg_${uuidv4()}`;
   const now = new Date().toISOString();
@@ -200,6 +204,7 @@ async function saveAssistantMessage({
     content,
     state,
     parentMsgId,
+    userId,
     modelId:      modelId || config.bedrock.modelId,
     inputTokens:  inputTokens  || 0,
     outputTokens: outputTokens || 0,
@@ -210,15 +215,7 @@ async function saveAssistantMessage({
   await ddb.send(new TransactWriteCommand({
     TransactItems: [
       { Put: { TableName: TABLES.messagesTable, Item: item } },
-      {
-        Update: {
-          TableName: TABLES.branchesTable,
-          Key: { branchId },
-          UpdateExpression:
-            'SET selectedMsgIds = list_append(if_not_exists(selectedMsgIds, :empty), :ids)',
-          ExpressionAttributeValues: { ':empty': [], ':ids': [msgId] },
-        },
-      },
+      branchAppendTransactItem(branchId, msgId),
     ],
   }));
 
@@ -280,11 +277,13 @@ async function getActiveHistoryForBranch(branchId, maxMessages, maxTokenBudget) 
   // Apply hard message cap
   const capped = ordered.slice(-maxMessages);
 
+  const CHARS_PER_TOKEN_ESTIMATE = 4; // 1 token ≈ 4 chars (varies ±20% by model/language) — used only for history truncation, not billing
+
   // Apply approximate token budget from the tail
   let tokenCount = 0;
   const budgeted = [];
   for (let i = capped.length - 1; i >= 0; i--) {
-    const approxTokens = Math.ceil(capped[i].content.length / 4);
+    const approxTokens = Math.ceil(capped[i].content.length / CHARS_PER_TOKEN_ESTIMATE);
     if (tokenCount + approxTokens > maxTokenBudget) break;
     tokenCount += approxTokens;
     budgeted.unshift(capped[i]);

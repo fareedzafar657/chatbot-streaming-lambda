@@ -65,7 +65,7 @@ exports.handler = awslambda.streamifyResponse(async (event, responseStream) => {
   try {
     await handleChatStream(transport, { ...parsed, userId });
   } catch (err) {
-    console.error('[handler] Unhandled error:', err);
+    console.error('[handler] Unhandled error:', err.message);
     transport.send({ type: 'error', message: 'Internal server error' });
   } finally {
     transport.end();

@@ -4,8 +4,8 @@ const { CognitoJwtVerifier } = require('aws-jwt-verify');
 const config = require('../config');
 
 // ─── DEV BYPASS ──────────────────────────────────────────────────────────────
-// Set AUTH_BYPASS=true in Lambda env vars to skip Cognito verification.
-// NEVER set this in production.
+// Enables local dev and integration testing without a real Cognito token.
+// Hardcodes userId to 'dev-user-001'. Only valid when NODE_ENV !== 'production'.
 const AUTH_BYPASS = process.env.AUTH_BYPASS === 'true';
 
 // ─── Verifier singleton ───────────────────────────────────────────────────────
@@ -24,6 +24,9 @@ function getVerifier() {
 
 async function verifyAuth(headers) {
   if (AUTH_BYPASS) {
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error('AUTH_BYPASS is not allowed in production');
+    }
     console.warn('[auth] AUTH_BYPASS enabled — skipping JWT verification');
     return { sub: 'dev-user-001' };
   }

@@ -1,9 +1,13 @@
 'use strict';
 
 /**
- * Parse and validate the incoming Lambda Function URL event body.
- * Supports both raw string body and base64-encoded body.
- *
+ * HTTP utilities for Lambda Function URL streaming responses.
+ * Handles request parsing (body decoding, JSON, validation) and builds
+ * CORS + content-type headers for NDJSON streaming.
+ * Does NOT handle auth — that lives in middleware/auth.js.
+ */
+
+/**
  * Expected JSON body:
  * {
  *   "prompt":       string   (required) — the user's message
@@ -48,22 +52,25 @@ function parseRequest(event) {
     prompt:       prompt.trim(),
     sessionId:    sessionId.trim(),
     branchId:     branchId?.trim()     || null,
-    apiKey:       typeof apiKey       === 'string' && apiKey.trim()       ? apiKey.trim()       : null,
-    provider:     typeof provider     === 'string' && provider.trim()     ? provider.trim()     : null,
-    model:        typeof model        === 'string' && model.trim()        ? model.trim()        : null,
-    systemPrompt: typeof systemPrompt === 'string' && systemPrompt.trim() ? systemPrompt.trim() : null,
+    apiKey:       typeof apiKey       === 'string' ? (apiKey.trim()       || null) : null,
+    provider:     typeof provider     === 'string' ? (provider.trim()     || null) : null,
+    model:        typeof model        === 'string' ? (model.trim()        || null) : null,
+    systemPrompt: typeof systemPrompt === 'string' ? (systemPrompt.trim() || null) : null,
   };
 }
 
 /**
- * Build content-type headers for streaming responses.
+ * Build headers for streaming responses, including CORS.
  * The Function URL handler reads these from httpResponseMetadata.
  */
-function streamingHeaders() {
+function streamingHeaders(origin) {
   return {
-    'Content-Type': 'application/x-ndjson',
-    'X-Content-Type-Options': 'nosniff',
-    'Cache-Control': 'no-cache, no-store',
+    'Content-Type':                     'application/x-ndjson',
+    'X-Content-Type-Options':           'nosniff',
+    'Cache-Control':                    'no-cache, no-store',
+    'Access-Control-Allow-Origin':      origin || '*',
+    'Access-Control-Allow-Methods':     'POST, OPTIONS',
+    'Access-Control-Allow-Headers':     'Authorization, Content-Type',
   };
 }
 

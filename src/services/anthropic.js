@@ -30,7 +30,7 @@ async function* streamAnthropicResponse(historyMessages, userPrompt, options = {
   const maxTokens    = options.maxTokens    || config.bedrock.maxTokens;
   const systemPrompt = options.systemPrompt || config.bedrock.systemPrompt;
 
-  const client = new Anthropic({ apiKey }); // per-call — never cached
+  const client = new Anthropic({ apiKey });
 
   try {
     const stream = client.messages.stream({
@@ -44,14 +44,17 @@ async function* streamAnthropicResponse(historyMessages, userPrompt, options = {
       if (event.type === 'content_block_delta' && event.delta?.type === 'text_delta') {
         yield { type: 'delta', text: event.delta.text };
       }
-      if (event.type === 'message_delta' && event.usage) {
-        yield {
-          type:         'done',
-          inputTokens:  event.usage.input_tokens  ?? 0,
-          outputTokens: event.usage.output_tokens ?? 0,
-        };
-      }
     }
+
+    // finalMessage() accumulates all events and returns accurate usage totals —
+    // safer than manually tracking message_start / message_delta which can fire multiple times
+    const final = await stream.finalMessage();
+    yield {
+      type:         'done',
+      inputTokens:  final.usage.input_tokens,
+      outputTokens: final.usage.output_tokens,
+      stopReason:   final.stop_reason,
+    };
   } catch (err) {
     console.error('[anthropic] error:', err.message); // message only — key never logged
     yield { type: 'error', error: 'Anthropic request failed' };

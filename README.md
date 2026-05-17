@@ -101,8 +101,9 @@ Invoke-WebRequest -Uri http://localhost:4000 -Method POST `
 
 Each line of the response is a JSON object. You should see `metadata` → `userMessage` → `delta` chunks → `done`.
 
-## Why not SAM + Docker?
+## WebSocket migration
 
-`sam local start-api` does not support Lambda response streaming (`awslambda.streamifyResponse`). The local server script bypasses that limitation entirely by calling the business logic directly.
+The transport layer is already abstracted — switching to WebSocket touches only `src/utils/transport.js`, `src/index.js`, and the infra template. All business logic, AI providers, and DB code are untouched.
 
-The `node-streaming-test.yaml` file is only used for deploying to AWS — it is not needed for local development.
+→ See **[docs/WEBSOCKET.md](docs/WEBSOCKET.md)** for the full step-by-step guide.
+

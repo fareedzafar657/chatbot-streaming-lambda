@@ -53,13 +53,14 @@ async function* streamBedrockResponse(historyMessages, userPrompt, options = {})
     messages,
     inferenceConfig: {
       maxTokens,
-      temperature: 0.7,
-      topP: 0.9,
+      temperature: config.bedrock.temperature,
+      topP:        config.bedrock.topP,
     },
   });
 
   let inputTokens  = 0;
   let outputTokens = 0;
+  let stopReason;
 
   try {
     const response = await client.send(command);
@@ -71,30 +72,23 @@ async function* streamBedrockResponse(historyMessages, userPrompt, options = {})
         yield { type: 'delta', text: event.contentBlockDelta.delta.text };
       }
 
-      // Token usage metadata (arrives in messageStart or metadata events)
+      // Both inputTokens and outputTokens arrive in metadata, which fires AFTER messageStop
       if (event.metadata?.usage) {
         inputTokens  = event.metadata.usage.inputTokens  || 0;
         outputTokens = event.metadata.usage.outputTokens || 0;
       }
 
-      // messageStart sometimes carries usage too
-      if (event.messageStart?.usage) {
-        inputTokens = event.messageStart.usage.inputTokens || 0;
-      }
-
-      // Stream complete
       if (event.messageStop) {
-        yield {
-          type: 'done',
-          stopReason: event.messageStop.stopReason,
-          inputTokens,
-          outputTokens,
-        };
+        stopReason = event.messageStop.stopReason;
       }
     }
+
+    // Yield done after the full stream so metadata tokens are captured
+    yield { type: 'done', stopReason, inputTokens, outputTokens };
+
   } catch (err) {
-    yield { type: 'error', error: err.message };
-    throw err;
+    console.error('[bedrock] stream error:', err.message);
+    yield { type: 'error', error: 'Model request failed' };
   }
 }
 

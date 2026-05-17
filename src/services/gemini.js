@@ -36,7 +36,7 @@ async function* streamGeminiResponse(historyMessages, userPrompt, options = {}) 
   const maxTokens    = options.maxTokens    || config.bedrock.maxTokens;
   const systemPrompt = options.systemPrompt || config.bedrock.systemPrompt;
 
-  const ai = new GoogleGenAI({ apiKey }); // per-call — never cached
+  const ai = new GoogleGenAI({ apiKey });
 
   try {
     const stream = await ai.models.generateContentStream({
@@ -48,7 +48,7 @@ async function* streamGeminiResponse(historyMessages, userPrompt, options = {}) 
       },
     });
 
-    let inputTokens = 0, outputTokens = 0;
+    let inputTokens = 0, outputTokens = 0, stopReason;
 
     for await (const chunk of stream) {
       if (chunk.text) {
@@ -59,9 +59,17 @@ async function* streamGeminiResponse(historyMessages, userPrompt, options = {}) 
         inputTokens  = chunk.usageMetadata.promptTokenCount     ?? 0;
         outputTokens = chunk.usageMetadata.candidatesTokenCount ?? 0;
       }
+      if (chunk.candidates?.[0]?.finishReason) {
+        stopReason = chunk.candidates[0].finishReason;
+      }
     }
 
-    yield { type: 'done', inputTokens, outputTokens };
+    // usageMetadata is nil for some models (e.g. gemini-2.5-pro) — known SDK issue
+    if (inputTokens === 0 && outputTokens === 0) {
+      console.warn('[gemini] usageMetadata missing from stream — known issue with some models');
+    }
+
+    yield { type: 'done', inputTokens, outputTokens, stopReason };
 
   } catch (err) {
     console.error('[gemini] error:', err.message); // message only — key never logged

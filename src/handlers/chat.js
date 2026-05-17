@@ -67,12 +67,8 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
 
   // ── 4. Select provider and stream response ───────────────────────────────
 
-  // Security: K-AI Bedrock path must always use Nova Micro.
-  // Clamp model to null so Bedrock falls back to config.bedrock.modelId.
-  // BYOK paths (apiKey present) honour the user's model — their key, their cost.
-  if (!apiKey && !provider && model) {
-    console.warn('[handleChatStream] blocked Bedrock model override attempt:', model);
-  }
+  // Security: Bedrock path (no apiKey) always uses the configured model — client cannot override.
+  // BYOK paths honour the user's model choice since it's their key and their cost.
   const safeModel = (!apiKey && !provider) ? null : model;
 
   const streamOptions = {
@@ -135,6 +131,7 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
       inputTokens,
       outputTokens,
       modelId: resolvedModelId,
+      userId,
     });
 
     transport.send({

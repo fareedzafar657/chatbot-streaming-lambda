@@ -12,6 +12,8 @@ const config = {
   bedrock: {
     modelId: process.env.BEDROCK_MODEL_ID || 'amazon.nova-micro-v1:0',
     maxTokens: parseInt(process.env.BEDROCK_MAX_TOKENS || '4096', 10),
+    temperature: Number.parseFloat(process.env.BEDROCK_TEMPERATURE || '0.7'),
+    topP: Number.parseFloat(process.env.BEDROCK_TOP_P || '0.9'),
     // System prompt injected for every conversation
     systemPrompt: process.env.SYSTEM_PROMPT ||
       'You are a helpful, concise assistant. Respond clearly and directly.',

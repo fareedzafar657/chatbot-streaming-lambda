@@ -46,10 +46,8 @@ const config = {
   },
 };
 
-// Fail fast at cold start if required vars are missing in production
-if (process.env.NODE_ENV === 'production') {
-  if (!config.cognito.userPoolId) throw new Error('COGNITO_USER_POOL_ID is required');
-  if (!config.cognito.clientId)   throw new Error('COGNITO_CLIENT_ID is required');
-}
+// Fail fast at cold start if required vars are missing
+if (!config.cognito.userPoolId) throw new Error('COGNITO_USER_POOL_ID env var is required');
+if (!config.cognito.clientId)   throw new Error('COGNITO_CLIENT_ID env var is required');
 
 module.exports = config;

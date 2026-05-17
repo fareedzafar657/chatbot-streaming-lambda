@@ -9,7 +9,7 @@ Running the Lambda locally for frontend development — no Docker, no SAM, full 
 ```
 POST http://localhost:4000
 Content-Type: application/json
-Authorization: Bearer <token>   ← omit when AUTH_BYPASS=true
+Authorization: Bearer <cognito-access-token>
 
 {"prompt":"...", "sessionId":"...", "branchId":"..."}
 ```
@@ -40,27 +40,25 @@ Response: NDJSON stream (same wire format as production).
 ## Start the server
 
 ```powershell
-$env:AUTH_BYPASS="true"; node scripts/local-server.js
+node scripts/local-server.js
 ```
 
 Custom port:
 
 ```powershell
-$env:AUTH_BYPASS="true"; $env:PORT="4001"; node scripts/local-server.js
+$env:PORT="4001"; node scripts/local-server.js
 ```
 
 Expected output:
 
 ```
 Local Lambda server running at http://localhost:4000
-AUTH_BYPASS=true
 ```
 
 ## Environment variables
 
 | Variable | Default | Notes |
 |---|---|---|
-| `AUTH_BYPASS` | `false` | Set `true` to skip Cognito JWT — required for local dev |
 | `PORT` | `4000` | HTTP port |
 | `AWS_REGION` | `us-east-1` | Must match where your DynamoDB tables live |
 | `BEDROCK_MODEL_ID` | `amazon.nova-micro-v1:0` | Override to use a different model |

@@ -1,5 +1,7 @@
 'use strict';
 
+require('dotenv').config(); // load .env for local dev — not used in Lambda
+
 /**
  * Local HTTP server that wraps the Lambda handler logic for frontend dev.
  *
@@ -7,8 +9,8 @@
  * Does NOT use awslambda globals — calls handleChatStream directly.
  *
  * Usage:
- *   AUTH_BYPASS=true node scripts/local-server.js
- *   AUTH_BYPASS=true PORT=3001 node scripts/local-server.js
+ *   node scripts/local-server.js
+ *   PORT=3001 node scripts/local-server.js
  */
 
 const http                             = require('http');
@@ -108,8 +110,4 @@ const server = http.createServer((req, res) => {
 
 server.listen(PORT, () => {
   console.log(`Local Lambda server running at http://localhost:${PORT}`);
-  console.log(`AUTH_BYPASS=${process.env.AUTH_BYPASS ?? 'false'}`);
-  if (!process.env.AUTH_BYPASS || process.env.AUTH_BYPASS !== 'true') {
-    console.warn('Tip: set AUTH_BYPASS=true to skip Cognito JWT verification');
-  }
 });

@@ -2,9 +2,9 @@
 
 /**
  * HTTP utilities for Lambda Function URL streaming responses.
- * Handles request parsing (body decoding, JSON, validation) and builds
- * CORS + content-type headers for NDJSON streaming.
+ * Handles request parsing (body decoding, JSON, validation).
  * Does NOT handle auth — that lives in middleware/auth.js.
+ * CORS is handled by Lambda Function URL configuration.
  */
 
 /**
@@ -59,19 +59,4 @@ function parseRequest(event) {
   };
 }
 
-/**
- * Build headers for streaming responses, including CORS.
- * The Function URL handler reads these from httpResponseMetadata.
- */
-function streamingHeaders(origin) {
-  return {
-    'Content-Type':                     'application/x-ndjson',
-    'X-Content-Type-Options':           'nosniff',
-    'Cache-Control':                    'no-cache, no-store',
-    'Access-Control-Allow-Origin':      origin || '*',
-    'Access-Control-Allow-Methods':     'POST, OPTIONS',
-    'Access-Control-Allow-Headers':     'Authorization, Content-Type',
-  };
-}
-
-module.exports = { parseRequest, streamingHeaders };
+module.exports = { parseRequest };

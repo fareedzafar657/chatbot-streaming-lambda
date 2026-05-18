@@ -3,8 +3,7 @@
 const { verifyAuth }       = require('./middleware/auth');
 const { handleChatStream } = require('./handlers/chat');
 const { createTransport }  = require('./utils/transport');
-const { parseRequest, streamingHeaders } = require('./utils/request');
-const config               = require('./config');
+const { parseRequest }     = require('./utils/request');
 
 /**
  * Lambda Function URL handler with response streaming.
@@ -22,23 +21,16 @@ const config               = require('./config');
  *
  * Error lines:
  *   {"type":"error","message":"Unauthorized: ..."}
+ *
+ * Note: CORS is handled by Function URL configuration, not in code.
  */
 exports.handler = awslambda.streamifyResponse(async (event, responseStream) => {
-  // Set response headers (must be set before writing to the stream)
-  // awslambda.HttpResponseStream.from() lets us set status + headers
   const metadata = {
     statusCode: 200,
-    headers: streamingHeaders(config.cors.origin),
+    headers: { 'Content-Type': 'application/x-ndjson' },
   };
   responseStream = awslambda.HttpResponseStream.from(responseStream, metadata);
-
   const transport = createTransport('functionUrl', { responseStream });
-
-  // ── CORS preflight ────────────────────────────────────────────────────────
-  if (event.requestContext?.http?.method === 'OPTIONS') {
-    responseStream.end();
-    return;
-  }
 
   // ── Auth ─────────────────────────────────────────────────────────────────
   let userId;
@@ -65,7 +57,7 @@ exports.handler = awslambda.streamifyResponse(async (event, responseStream) => {
   try {
     await handleChatStream(transport, { ...parsed, userId });
   } catch (err) {
-    console.error('[handler] Unhandled error:', err.message);
+    console.error('[handler] Unhandled error:', err);
     transport.send({ type: 'error', message: 'Internal server error' });
   } finally {
     transport.end();

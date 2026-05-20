@@ -23,10 +23,11 @@ const TABLES = config.dynamo;
 
 // ─── Message states ──────────────────────────────────────────────────────────
 const MessageState = {
-  ACTIVE:   'active',
-  STOPPED:  'stopped',
-  EDITED:   'edited',
-  DELETED:  'deleted',
+  ACTIVE:    'active',
+  STOPPED:   'stopped',
+  EDITED:    'edited',
+  DELETED:   'deleted',
+  COMPACTED: 'compacted', // original messages replaced by a compaction summary
 };
 
 // ─── Sessions ────────────────────────────────────────────────────────────────

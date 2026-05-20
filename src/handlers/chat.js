@@ -85,10 +85,23 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
     provider === 'gemini'          ? 'gemini-2.5-flash' :
     config.bedrock.modelId;
 
+  // All AI providers require conversation history to start with a user turn.
+  // If the branch starts with a compaction summary (assistant role), inject its
+  // content into the system prompt so it acts as context without breaking the API contract.
+  const effectiveOptions = { ...streamOptions };
+  let historyForProvider = priorHistory;
+  if (priorHistory.length > 0 && priorHistory[0].role === 'assistant') {
+    const ctx = `[Context from previous conversation]\n${priorHistory[0].content}`;
+    effectiveOptions.systemPrompt = effectiveOptions.systemPrompt
+      ? `${effectiveOptions.systemPrompt}\n\n${ctx}`
+      : ctx;
+    historyForProvider = priorHistory.slice(1);
+  }
+
   const stream =
-    apiKey && provider === 'anthropic' ? streamAnthropicResponse(priorHistory, prompt, streamOptions) :
-    apiKey && provider === 'gemini'    ? streamGeminiResponse(priorHistory, prompt, streamOptions) :
-    streamBedrockResponse(priorHistory, prompt, streamOptions);
+    apiKey && provider === 'anthropic' ? streamAnthropicResponse(historyForProvider, prompt, effectiveOptions) :
+    apiKey && provider === 'gemini'    ? streamGeminiResponse(historyForProvider, prompt, effectiveOptions) :
+    streamBedrockResponse(historyForProvider, prompt, effectiveOptions);
 
   let fullText     = '';
   let inputTokens  = 0;

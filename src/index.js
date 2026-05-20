@@ -16,7 +16,6 @@ const { parseRequest }     = require('./utils/request');
  *   {"type":"metadata","sessionId":"...","branchId":"..."}
  *   {"type":"userMessage","msgId":"..."}
  *   {"type":"delta","text":"Hello"}
- *   {"type":"delta","text":", world"}
  *   {"type":"done","msgId":"...","state":"active","inputTokens":42,"outputTokens":17}
  *
  * Error lines:
@@ -36,7 +35,7 @@ exports.handler = awslambda.streamifyResponse(async (event, responseStream) => {
   let userId;
   try {
     const payload = await verifyAuth(event.headers);
-    userId = payload.sub;           // Cognito user UUID
+    userId = payload.sub;
   } catch (err) {
     transport.send({ type: 'error', message: err.message });
     transport.end();

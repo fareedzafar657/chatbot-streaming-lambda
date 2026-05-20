@@ -10,8 +10,8 @@ function getVerifier() {
   if (!verifier) {
     verifier = CognitoJwtVerifier.create({
       userPoolId: config.cognito.userPoolId,
-      tokenUse: 'access',
-      clientId: config.cognito.clientId,
+      tokenUse:   'access',
+      clientId:   config.cognito.clientId,
     });
   }
   return verifier;

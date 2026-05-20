@@ -3,18 +3,9 @@
 /**
  * Transport abstraction layer.
  *
- * The streaming Lambda uses this instead of writing to responseStream directly.
- * To migrate to WebSocket, swap in the WebSocketTransport below and update
- * the handler to pass the connectionId — zero Bedrock/DB logic changes needed.
- *
- * Wire format: newline-delimited JSON (NDJSON), compatible with the
- * EventSource / fetch ReadableStream approach on the frontend.
- *
- * Each line is:
- *   {"type":"delta","text":"..."}          — token chunk
- *   {"type":"metadata","msgId":"...","sessionId":"...","branchId":"..."} — IDs up front
- *   {"type":"done","inputTokens":N,"outputTokens":N}  — stream end
- *   {"type":"error","message":"..."}       — error
+ * Decouples streaming logic from the wire protocol. To migrate to WebSocket,
+ * implement WebSocketTransport and update src/index.js — zero changes to
+ * handlers, services, or DB code.
  */
 
 // ─── Function URL transport ──────────────────────────────────────────────────
@@ -24,12 +15,10 @@ class FunctionUrlTransport {
     this._stream = responseStream;
   }
 
-  /** Send a JSON line to the client. */
   send(payload) {
     this._stream.write(JSON.stringify(payload) + '\n');
   }
 
-  /** Close the response stream. */
   end() {
     this._stream.end();
   }
@@ -55,15 +44,10 @@ class FunctionUrlTransport {
 
 // ─── Factory ─────────────────────────────────────────────────────────────────
 
-/**
- * Create the right transport based on current mode.
- * Currently only 'functionUrl' is active.
- */
 function createTransport(mode, { responseStream } = {}) {
   if (mode === 'functionUrl') {
     return new FunctionUrlTransport(responseStream);
   }
-  // Future: if (mode === 'websocket') return new WebSocketTransport(...)
   throw new Error(`Unknown transport mode: ${mode}`);
 }
 

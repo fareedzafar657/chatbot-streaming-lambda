@@ -12,18 +12,6 @@ function buildAnthropicMessages(dbMessages, userPrompt) {
 
 // ─── Streaming generator ──────────────────────────────────────────────────────
 
-/**
- * Stream a response from Anthropic using the user's own API key.
- * Yields same chunk shapes as streamBedrockResponse() — delta/done/error.
- *
- * @param {Array}  historyMessages       - from getActiveHistoryForBranch()
- * @param {string} userPrompt
- * @param {object} options
- * @param {string} options.apiKey        - user's Anthropic key (required)
- * @param {string} [options.modelId]     - defaults to claude-haiku-4-5-20251001
- * @param {number} [options.maxTokens]   - defaults to config.bedrock.maxTokens
- * @param {string} [options.systemPrompt]- defaults to config.bedrock.systemPrompt
- */
 async function* streamAnthropicResponse(historyMessages, userPrompt, options = {}) {
   const { apiKey } = options;
   const modelId      = options.modelId      || 'claude-haiku-4-5-20251001';

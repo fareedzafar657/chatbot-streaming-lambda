@@ -9,39 +9,18 @@ const config = require('../config');
 // Singleton client — reused across warm invocations
 const client = new BedrockRuntimeClient({ region: config.region });
 
-/**
- * Convert our internal DB message format → Bedrock Converse API messages array.
- * Filters to user/assistant only, preserves order.
- *
- * @param {Array} dbMessages  - from getActiveHistoryForBranch()
- * @returns {Array}           - Bedrock-format messages
- */
 function buildBedrockMessages(dbMessages) {
   return dbMessages.map(m => ({
-    role: m.role,                         // 'user' | 'assistant'
+    role:    m.role,
     content: [{ text: m.content }],
   }));
 }
 
-/**
- * Stream a response from Bedrock using the Converse streaming API.
- * Yields chunks as they arrive.
- *
- * @param {Array}    historyMessages  - prior active messages from DB
- * @param {string}   userPrompt       - the new user message text
- * @param {object}   [options]
- * @param {string}   [options.modelId]
- * @param {number}   [options.maxTokens]
- * @param {string}   [options.systemPrompt]
- *
- * @yields {{ type: 'delta'|'done'|'error', text?: string, inputTokens?: number, outputTokens?: number }}
- */
 async function* streamBedrockResponse(historyMessages, userPrompt, options = {}) {
-  const modelId     = options.modelId     || config.bedrock.modelId;
-  const maxTokens   = options.maxTokens   || config.bedrock.maxTokens;
+  const modelId      = options.modelId      || config.bedrock.modelId;
+  const maxTokens    = options.maxTokens    || config.bedrock.maxTokens;
   const systemPrompt = options.systemPrompt || config.bedrock.systemPrompt;
 
-  // Build full messages array: history + new user turn
   const messages = [
     ...buildBedrockMessages(historyMessages),
     { role: 'user', content: [{ text: userPrompt }] },
@@ -67,7 +46,6 @@ async function* streamBedrockResponse(historyMessages, userPrompt, options = {})
 
     for await (const event of response.stream) {
 
-      // Text delta — the main streaming token
       if (event.contentBlockDelta?.delta?.text) {
         yield { type: 'delta', text: event.contentBlockDelta.delta.text };
       }

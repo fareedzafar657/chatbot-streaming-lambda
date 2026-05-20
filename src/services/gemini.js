@@ -15,21 +15,6 @@ function buildGeminiContents(dbMessages, userPrompt) {
 
 // ─── Streaming generator ──────────────────────────────────────────────────────
 
-/**
- * Stream a response from Google Gemini using the user's own API key.
- * Yields same chunk shapes as streamBedrockResponse() — delta/done/error.
- *
- * usageMetadata accumulates across chunks — only the last chunk has accurate
- * final token counts, so we overwrite on each chunk and yield done after the loop.
- *
- * @param {Array}  historyMessages       - from getActiveHistoryForBranch()
- * @param {string} userPrompt
- * @param {object} options
- * @param {string} options.apiKey        - user's Gemini key (required)
- * @param {string} [options.modelId]     - defaults to gemini-2.5-flash
- * @param {number} [options.maxTokens]   - defaults to config.bedrock.maxTokens
- * @param {string} [options.systemPrompt]- defaults to config.bedrock.systemPrompt
- */
 async function* streamGeminiResponse(historyMessages, userPrompt, options = {}) {
   const { apiKey } = options;
   const modelId      = options.modelId      || 'gemini-2.5-flash';

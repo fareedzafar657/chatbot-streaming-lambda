@@ -27,15 +27,11 @@ const MessageState = {
   STOPPED:   'stopped',
   EDITED:    'edited',
   DELETED:   'deleted',
-  COMPACTED: 'compacted', // original messages replaced by a compaction summary
+  COMPACTED: 'compacted',
 };
 
 // ─── Sessions ────────────────────────────────────────────────────────────────
 
-/**
- * Get or create a session. Returns the session record.
- * A session owns a default "trunk" branch created on first use.
- */
 async function getOrCreateSession(sessionId, userId) {
   const existing = await ddb.send(new GetCommand({
     TableName: TABLES.sessionsTable,
@@ -49,7 +45,6 @@ async function getOrCreateSession(sessionId, userId) {
     return existing.Item;
   }
 
-  // New session — create session + trunk branch atomically
   const trunkBranchId = `branch_${uuidv4()}`;
   const now = new Date().toISOString();
 
@@ -66,12 +61,13 @@ async function getOrCreateSession(sessionId, userId) {
     branchId: trunkBranchId,
     sessionId,
     parentBranchId: null,
-    parentMsgId: null,         // message after which the fork happened
-    selectedMsgIds: [],        // grows as messages are added
-    label: 'main',
-    createdAt: now,
+    parentMsgId:    null,
+    selectedMsgIds: [],
+    label:          'main',
+    createdAt:      now,
   };
 
+  // Create session + trunk branch atomically
   await ddb.send(new TransactWriteCommand({
     TransactItems: [
       { Put: { TableName: TABLES.sessionsTable, Item: session } },
@@ -93,10 +89,7 @@ async function getBranch(branchId) {
   return res.Item;
 }
 
-/**
- * Fork: create a new branch from a custom selectedMsgIds list.
- * The old branch is preserved intact.
- */
+// Fork: the parent branch is preserved intact — only the new branch gets the new selectedMsgIds.
 async function forkBranch({ sessionId, parentBranchId, parentMsgId, selectedMsgIds, label }) {
   const branchId = `branch_${uuidv4()}`;
   const now = new Date().toISOString();
@@ -107,16 +100,14 @@ async function forkBranch({ sessionId, parentBranchId, parentMsgId, selectedMsgI
     parentBranchId,
     parentMsgId,
     selectedMsgIds: selectedMsgIds || [],
-    label: label || `fork-${Date.now()}`,
-    createdAt: now,
+    label:          label || `fork-${Date.now()}`,
+    createdAt:      now,
   };
 
   await ddb.send(new PutCommand({ TableName: TABLES.branchesTable, Item: branch }));
   return branch;
 }
 
-// Returns the TransactWrite Update item for appending a msgId to a branch's selectedMsgIds.
-// Used in both saveUserMessage and saveAssistantMessage transactions.
 function branchAppendTransactItem(branchId, msgId) {
   return {
     Update: {
@@ -128,9 +119,6 @@ function branchAppendTransactItem(branchId, msgId) {
   };
 }
 
-/**
- * Append a msgId to a branch's selectedMsgIds list.
- */
 async function appendMsgToBranch(branchId, msgId) {
   const { Update } = branchAppendTransactItem(branchId, msgId);
   await ddb.send(new UpdateCommand(Update));
@@ -138,9 +126,6 @@ async function appendMsgToBranch(branchId, msgId) {
 
 // ─── Messages ────────────────────────────────────────────────────────────────
 
-/**
- * Save a user message. Returns the saved item.
- */
 async function saveUserMessage({ sessionId, branchId, content, userId }) {
   const msgId = `msg_${uuidv4()}`;
   const now = new Date().toISOString();
@@ -149,9 +134,9 @@ async function saveUserMessage({ sessionId, branchId, content, userId }) {
     msgId,
     sessionId,
     branchId,
-    role: 'user',
+    role:      'user',
     content,
-    state: MessageState.ACTIVE,
+    state:     MessageState.ACTIVE,
     userId,
     createdAt: now,
     updatedAt: now,
@@ -168,10 +153,7 @@ async function saveUserMessage({ sessionId, branchId, content, userId }) {
   return item;
 }
 
-/**
- * Save the assistant's streamed response once streaming is complete.
- * Checks the parent user message state — if it was stopped, marks this stopped too.
- */
+// saveAssistantMessage inherits stopped state from the parent user message if it was stopped mid-flight.
 async function saveAssistantMessage({
   sessionId,
   branchId,
@@ -201,7 +183,7 @@ async function saveAssistantMessage({
     msgId,
     sessionId,
     branchId,
-    role: 'assistant',
+    role:         'assistant',
     content,
     state,
     parentMsgId,
@@ -209,8 +191,8 @@ async function saveAssistantMessage({
     modelId:      modelId || config.bedrock.modelId,
     inputTokens:  inputTokens  || 0,
     outputTokens: outputTokens || 0,
-    createdAt: now,
-    updatedAt: now,
+    createdAt:    now,
+    updatedAt:    now,
   };
 
   await ddb.send(new TransactWriteCommand({
@@ -223,9 +205,6 @@ async function saveAssistantMessage({
   return item;
 }
 
-/**
- * Update the state of any message (stop, edit, delete, restore).
- */
 async function updateMessageState(msgId, state, editedContent = undefined) {
   const updates = ['#st = :state', 'updatedAt = :now'];
   const names  = { '#st': 'state' };
@@ -245,17 +224,13 @@ async function updateMessageState(msgId, state, editedContent = undefined) {
   }));
 }
 
-/**
- * Fetch the active messages for a branch in order, ready to feed to Bedrock.
- * Respects the branch's selectedMsgIds ordering and filters to active only.
- */
 async function getActiveHistoryForBranch(branchId, maxMessages, maxTokenBudget) {
   const branch = await getBranch(branchId);
   const { selectedMsgIds = [] } = branch;
 
   if (selectedMsgIds.length === 0) return [];
 
-  // Batch-get all selected messages in chunks of 100
+  // Batch-get all selected messages in chunks of 100 (DynamoDB BatchGet limit)
   const chunks = chunkArray(selectedMsgIds, 100);
   const allItems = [];
 
@@ -275,12 +250,10 @@ async function getActiveHistoryForBranch(branchId, maxMessages, maxTokenBudget) 
     .map(id => byId[id])
     .filter(m => m && m.state === MessageState.ACTIVE);
 
-  // Apply hard message cap
   const capped = ordered.slice(-maxMessages);
 
   const CHARS_PER_TOKEN_ESTIMATE = 4; // 1 token ≈ 4 chars (varies ±20% by model/language) — used only for history truncation, not billing
 
-  // Apply approximate token budget from the tail
   let tokenCount = 0;
   const budgeted = [];
   for (let i = capped.length - 1; i >= 0; i--) {
@@ -293,7 +266,7 @@ async function getActiveHistoryForBranch(branchId, maxMessages, maxTokenBudget) 
   return budgeted;
 }
 
-// ─── Helpers ────────────────────────────────────────────────────────────────
+// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function chunkArray(arr, size) {
   const chunks = [];

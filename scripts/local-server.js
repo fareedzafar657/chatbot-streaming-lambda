@@ -1,24 +1,17 @@
 'use strict';
 
-require('dotenv').config(); // load .env for local dev — not used in Lambda
+require('dotenv').config();
 
 /**
- * Local HTTP server that wraps the Lambda handler logic for frontend dev.
- *
- * Mimics a Lambda Function URL: POST / → NDJSON stream.
+ * Local HTTP server that wraps the Lambda handler for frontend dev.
  * Does NOT use awslambda globals — calls handleChatStream directly.
- *
- * Usage:
- *   node scripts/local-server.js
- *   PORT=3001 node scripts/local-server.js
  */
 
-const http                             = require('http');
-const { verifyAuth }                   = require('../src/middleware/auth');
-const { handleChatStream }             = require('../src/handlers/chat');
-const { FunctionUrlTransport }         = require('../src/utils/transport');
+const http                               = require('http');
+const { verifyAuth }                     = require('../src/middleware/auth');
+const { handleChatStream }               = require('../src/handlers/chat');
+const { FunctionUrlTransport }           = require('../src/utils/transport');
 const { parseRequest, streamingHeaders } = require('../src/utils/request');
-const config                           = require('../src/config');
 
 const PORT = process.env.PORT || 4000;
 
@@ -33,7 +26,6 @@ const CORS_HEADERS = {
 // ─── Request handler ──────────────────────────────────────────────────────────
 
 async function handler(req, res) {
-  // CORS preflight
   if (req.method === 'OPTIONS') {
     res.writeHead(204, CORS_HEADERS);
     res.end();
@@ -46,23 +38,18 @@ async function handler(req, res) {
     return;
   }
 
-  // Buffer body
   const chunks = [];
   for await (const chunk of req) chunks.push(chunk);
   const rawBody = Buffer.concat(chunks).toString('utf-8');
 
   // Build a minimal Lambda-style event so parseRequest works unchanged
   const event = {
-    body: rawBody,
+    body:            rawBody,
     isBase64Encoded: false,
-    headers: req.headers,
+    headers:         req.headers,
   };
 
-  // Stream response headers
-  res.writeHead(200, {
-    ...CORS_HEADERS,
-    ...streamingHeaders(),
-  });
+  res.writeHead(200, { ...CORS_HEADERS, ...streamingHeaders() });
 
   const transport = new FunctionUrlTransport(res);
 

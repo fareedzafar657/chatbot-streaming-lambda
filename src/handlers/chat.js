@@ -6,29 +6,23 @@ const { streamGeminiResponse }    = require('../services/gemini');
 const db                          = require('../services/dynamodb');
 const config                      = require('../config');
 
-/**
- * Core streaming handler — orchestrates the full chat turn:
- *   1. Resolve session + branch
- *   2. Save user message
- *   3. Load active history
- *   4. Stream Bedrock response token by token via transport
- *   5. Save assistant message (with state check against user msg)
- *
- * Transport-agnostic: accepts any object with .send(payload) and .end() methods.
- * This means migrating to WebSocket only requires a new transport object,
- * not changes to this file.
- *
- * @param {object} transport   - FunctionUrlTransport or WebSocketTransport
- * @param {object} params
- * @param {string} params.prompt
- * @param {string} params.sessionId
- * @param {string|null} params.branchId  - null → use session's activeBranchId
- * @param {string} params.userId         - from Cognito JWT sub
- */
 async function handleChatStream(transport, { prompt, sessionId, branchId, userId, apiKey, provider, model, systemPrompt }) {
 
   // ── 1. Resolve session + branch ──────────────────────────────────────────
   const session = await db.getOrCreateSession(sessionId, userId);
+
+  // Verify the caller-supplied branchId actually belongs to this session.
+  // Without this check an authenticated user could inject any branchId and
+  // have another user's conversation history fed to the model.
+  if (branchId && branchId !== session.activeBranchId) {
+    const branch = await db.getBranch(branchId);
+    if (branch.sessionId !== sessionId) {
+      transport.send({ type: 'error', message: 'Forbidden' });
+      transport.end();
+      return;
+    }
+  }
+
   const activeBranchId = branchId || session.activeBranchId;
 
   // Send metadata immediately so the client knows IDs before tokens arrive
@@ -51,18 +45,13 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
     msgId: userMsg.msgId,
   });
 
-  // ── 3. Load active history (excluding the message we just saved) ─────────
-  //    getActiveHistoryForBranch returns the branch's selectedMsgIds in order,
-  //    filtered to state=active. The new user message is already appended to
-  //    the branch, so we pass it to Bedrock as the last turn.
+  // ── 3. Load active history ───────────────────────────────────────────────
   const history = await db.getActiveHistoryForBranch(
     activeBranchId,
     config.history.maxMessages,
     config.history.maxTokenBudget,
   );
 
-  // Separate the history from the current user turn (last message is the new one)
-  // We pass the prior history + the prompt separately to streamBedrockResponse
   const priorHistory = history.filter(m => m.msgId !== userMsg.msgId);
 
   // ── 4. Select provider and stream response ───────────────────────────────
@@ -78,7 +67,7 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
     apiKey,
   };
 
-  // Resolve the modelId that will actually be used — saved to DynamoDB for usage tracking
+  // Resolve the modelId saved to DynamoDB for usage tracking
   const resolvedModelId =
     safeModel                      ? safeModel :
     provider === 'anthropic'       ? 'claude-haiku-4-5-20251001' :
@@ -133,8 +122,6 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
   }
 
   // ── 5. Persist assistant message ─────────────────────────────────────────
-  //    saveAssistantMessage checks if the parent user message was stopped.
-  //    If yes, the assistant message is saved as state=stopped automatically.
   if (fullText.length > 0) {
     const assistantMsg = await db.saveAssistantMessage({
       sessionId,
@@ -155,7 +142,6 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
       outputTokens,
     });
   } else if (!hadError) {
-    // Bedrock returned empty content (shouldn't happen, but handle gracefully)
     transport.send({ type: 'done', msgId: null, inputTokens, outputTokens });
   }
 }

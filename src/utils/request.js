@@ -1,24 +1,11 @@
 'use strict';
 
 /**
- * HTTP utilities for Lambda Function URL streaming responses.
- * Handles request parsing (body decoding, JSON, validation).
+ * Request parsing and validation.
  * Does NOT handle auth — that lives in middleware/auth.js.
  * CORS is handled by Lambda Function URL configuration.
  */
 
-/**
- * Expected JSON body:
- * {
- *   "prompt":       string   (required) — the user's message
- *   "sessionId":    string   (required) — client-managed session identifier
- *   "branchId":     string   (optional) — if omitted, uses session's activeBranchId
- *   "apiKey":       string   (optional) — user's own provider API key
- *   "provider":     string   (optional) — "anthropic" | "gemini"; omit for Bedrock
- *   "model":        string   (optional) — model ID; omit for provider default
- *   "systemPrompt": string   (optional) — overrides the default system prompt
- * }
- */
 function parseRequest(event) {
   let rawBody = event.body;
 
@@ -40,8 +27,15 @@ function parseRequest(event) {
 
   const { prompt, sessionId, branchId, apiKey, provider, model, systemPrompt } = body;
 
+  // DynamoDB item limit is 400 KB; keep well under it for the message row.
+  // 32 000 chars ≈ 8 000 tokens — a generous cap that still prevents abuse.
+  const PROMPT_MAX_CHARS = 32_000;
+
   if (!prompt || typeof prompt !== 'string' || prompt.trim().length === 0) {
     throw Object.assign(new Error('prompt is required and must be a non-empty string'), { statusCode: 400 });
+  }
+  if (prompt.length > PROMPT_MAX_CHARS) {
+    throw Object.assign(new Error(`prompt exceeds maximum length of ${PROMPT_MAX_CHARS} characters`), { statusCode: 400 });
   }
 
   if (!sessionId || typeof sessionId !== 'string') {
@@ -59,4 +53,12 @@ function parseRequest(event) {
   };
 }
 
-module.exports = { parseRequest };
+function streamingHeaders() {
+  return {
+    'Content-Type':           'application/x-ndjson',
+    'Transfer-Encoding':      'chunked',
+    'X-Content-Type-Options': 'nosniff',
+  };
+}
+
+module.exports = { parseRequest, streamingHeaders };

@@ -1,5 +1,18 @@
 'use strict';
 
+/**
+ * AWS Bedrock streaming adapter — the default provider.
+ *
+ * Used whenever a request has no BYOK apiKey. Calls Bedrock's ConverseStream
+ * API and yields a uniform chunk stream — {type:'delta'|'done'|'error'} — so
+ * the chat handler treats every provider identically.
+ *
+ * Authentication is the Lambda's IAM role (not a per-user key), so the client
+ * is a module-level singleton reused across warm invocations. Token usage
+ * arrives in a metadata event that fires AFTER the text, so 'done' is yielded
+ * only once the whole stream has drained.
+ */
+
 const {
   BedrockRuntimeClient,
   ConverseStreamCommand,

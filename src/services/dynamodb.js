@@ -1,5 +1,23 @@
 'use strict';
 
+/**
+ * Data access layer — sessions, branches, and messages in DynamoDB.
+ *
+ * Every read and write of conversation state goes through this file. It owns
+ * the branching-history model: a session points at an active branch, and a
+ * branch is an ordered list of message IDs (selectedMsgIds). Writes that must
+ * not half-apply (save a message + append it to its branch) use a single
+ * TransactWrite.
+ *
+ * getActiveHistoryForBranch also trims history to fit a model's context: it
+ * keeps the most recent messages within a message count and an approximate
+ * token budget.
+ *
+ * The client is a module-level singleton reused across warm invocations.
+ * Branch forking and message editing (forkBranch, updateMessageState) are
+ * exposed here but driven by the separate chatbot-fast-api-lambda REST API.
+ */
+
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const {
   DynamoDBDocumentClient,
@@ -188,7 +206,7 @@ async function saveAssistantMessage({
     state,
     parentMsgId,
     userId,
-    modelId:      modelId || config.bedrock.modelId,
+    modelId,
     inputTokens:  inputTokens  || 0,
     outputTokens: outputTokens || 0,
     createdAt:    now,

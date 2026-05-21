@@ -15,7 +15,7 @@
 - **Multi-provider AI** — AWS Bedrock (default), Anthropic (BYOK), and Google Gemini (BYOK) in a single handler
 - **Branching conversation history** — full branch tree stored in DynamoDB; each fork is an independent ordered list of message IDs
 - **Cognito JWT auth** — every request is verified against your Cognito User Pool before any AI call is made
-- **Transport-agnostic design** — a thin `Transport` interface decouples streaming logic from the wire protocol; WebSocket migration touches one file
+- **Transport-agnostic design** — a thin `Transport` interface decouples streaming logic from the wire protocol
 - **Local dev server** — plain Node.js HTTP server that wraps the same handler logic, no SAM or Docker needed
 - **History trimming** — configurable message count and token-budget caps prevent oversized Bedrock payloads
 - **Usage tracking** — input and output token counts are saved per message for cost monitoring
@@ -159,6 +159,7 @@ Error line (stream continues to close after this):
 ```
 src/
 ├── index.js                  # Lambda handler entry point (streamifyResponse)
+├── run-chat-request.js       # Shared request lifecycle: auth → parse → stream
 ├── config.js                 # Centralised env-var config with fail-fast validation
 ├── handlers/
 │   └── chat.js               # Core chat turn orchestrator (transport-agnostic)
@@ -170,7 +171,7 @@ src/
 ├── middleware/
 │   └── auth.js               # Cognito JWT verification (singleton verifier)
 └── utils/
-    ├── transport.js          # FunctionUrlTransport + WebSocketTransport stub
+    ├── transport.js          # FunctionUrlTransport (wire-protocol abstraction)
     └── request.js            # Request parsing and validation
 
 scripts/
@@ -181,7 +182,9 @@ infra/
 └── lambda-iam-policy.json    # Minimum IAM policy for the Lambda execution role
 
 docs/
-└── WEBSOCKET.md              # Step-by-step WebSocket migration guide
+└── CODE-REVIEW.md            # Cleanup changelog + prioritised review findings
+
+ARCHITECTURE.md               # How the service works, end to end (start here)
 ```
 
 ---
@@ -275,16 +278,6 @@ Each line of the output is a JSON object: `metadata` → `userMessage` → `delt
 | `DYNAMO_SESSIONS_TABLE` | `chatbot_sessions` | No | DynamoDB sessions table name |
 | `CORS_ORIGIN` | `*` | No | CORS origin (local server only — Lambda uses Function URL CORS config) |
 | `PORT` | `4000` | No | Local dev server port |
-
----
-
-## WebSocket Migration
-
-The transport layer is already abstracted — `FunctionUrlTransport` and a stubbed `WebSocketTransport` live in `src/utils/transport.js`. The handler (`src/handlers/chat.js`) calls only `transport.send()` and `transport.end()`.
-
-To migrate: implement `WebSocketTransport`, update `src/index.js` to handle `$connect`/`$disconnect`/`$default` routes, and add an API Gateway WebSocket resource to the infra. All Bedrock, DynamoDB, and history logic is untouched.
-
-See **[docs/WEBSOCKET.md](./docs/WEBSOCKET.md)** for the full step-by-step guide.
 
 ---
 

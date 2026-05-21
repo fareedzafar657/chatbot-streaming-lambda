@@ -6,6 +6,9 @@
  * CORS is handled by Lambda Function URL configuration.
  */
 
+// Providers that accept a bring-your-own-key request.
+const BYOK_PROVIDERS = ['anthropic', 'gemini'];
+
 function parseRequest(event) {
   let rawBody = event.body;
 
@@ -42,7 +45,7 @@ function parseRequest(event) {
     throw Object.assign(new Error('sessionId is required'), { statusCode: 400 });
   }
 
-  return {
+  const normalized = {
     prompt:       prompt.trim(),
     sessionId:    sessionId.trim(),
     branchId:     branchId?.trim()     || null,
@@ -51,6 +54,18 @@ function parseRequest(event) {
     model:        typeof model        === 'string' ? (model.trim()        || null) : null,
     systemPrompt: typeof systemPrompt === 'string' ? (systemPrompt.trim() || null) : null,
   };
+
+  // A BYOK request (apiKey set) must name which provider the key is for.
+  // Otherwise the key cannot be routed and would be silently ignored while the
+  // request fell through to the default Bedrock provider.
+  if (normalized.apiKey && !BYOK_PROVIDERS.includes(normalized.provider)) {
+    throw Object.assign(
+      new Error('provider must be "anthropic" or "gemini" when apiKey is set'),
+      { statusCode: 400 },
+    );
+  }
+
+  return normalized;
 }
 
 function streamingHeaders() {

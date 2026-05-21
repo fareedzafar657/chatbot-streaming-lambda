@@ -3,9 +3,14 @@
 /**
  * Transport abstraction layer.
  *
- * Decouples streaming logic from the wire protocol. To migrate to WebSocket,
- * implement WebSocketTransport and update src/index.js — zero changes to
- * handlers, services, or DB code.
+ * Decouples streaming logic from the wire protocol. The chat handler and every
+ * service only ever call transport.send() and transport.end() — they never
+ * touch the response stream directly. A new wire protocol is added by writing
+ * one more Transport class and teaching the factory below about it; no changes
+ * to handlers, services, or DB code.
+ *
+ * Today there is exactly one transport: FunctionUrlTransport (Lambda Function
+ * URL response streaming).
  */
 
 // ─── Function URL transport ──────────────────────────────────────────────────
@@ -23,24 +28,6 @@ class FunctionUrlTransport {
     this._stream.end();
   }
 }
-
-// ─── WebSocket transport (for future migration) ──────────────────────────────
-//
-// class WebSocketTransport {
-//   constructor(apiGwClient, connectionId) {
-//     this._client = apiGwClient;
-//     this._connectionId = connectionId;
-//   }
-//
-//   async send(payload) {
-//     await this._client.postToConnection({
-//       ConnectionId: this._connectionId,
-//       Data: JSON.stringify(payload),
-//     });
-//   }
-//
-//   end() { /* WebSocket disconnect handled separately */ }
-// }
 
 // ─── Factory ─────────────────────────────────────────────────────────────────
 

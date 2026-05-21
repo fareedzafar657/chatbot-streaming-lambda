@@ -33,9 +33,11 @@ exports.handler = awslambda.streamifyResponse(async (event, responseStream) => {
 
   // ── Auth ─────────────────────────────────────────────────────────────────
   let userId;
+  let userEmail = null;
   try {
     const payload = await verifyAuth(event.headers);
     userId = payload.sub;
+    userEmail = payload.username ?? null;
   } catch (err) {
     transport.send({ type: 'error', message: err.message });
     transport.end();
@@ -54,7 +56,7 @@ exports.handler = awslambda.streamifyResponse(async (event, responseStream) => {
 
   // ── Stream chat ───────────────────────────────────────────────────────────
   try {
-    await handleChatStream(transport, { ...parsed, userId });
+    await handleChatStream(transport, { ...parsed, userId, userEmail });
   } catch (err) {
     console.error('[handler] Unhandled error:', err);
     transport.send({ type: 'error', message: 'Internal server error' });

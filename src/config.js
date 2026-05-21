@@ -32,6 +32,14 @@ const config = {
   cors: {
     origin: process.env.CORS_ORIGIN || '*',
   },
+
+  // Comma-separated emails allowed to select demo Bedrock models.
+  // Empty = feature disabled for everyone.
+  demoModels: {
+    allowedEmails: process.env.DEMO_MODELS_ALLOWED_EMAILS
+      ? process.env.DEMO_MODELS_ALLOWED_EMAILS.split(',').map((e) => e.trim()).filter(Boolean)
+      : [],
+  },
 };
 
 if (!config.cognito.userPoolId) throw new Error('COGNITO_USER_POOL_ID env var is required');

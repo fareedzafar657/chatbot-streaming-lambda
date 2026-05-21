@@ -6,7 +6,13 @@ const { streamGeminiResponse }    = require('../services/gemini');
 const db                          = require('../services/dynamodb');
 const config                      = require('../config');
 
-async function handleChatStream(transport, { prompt, sessionId, branchId, userId, apiKey, provider, model, systemPrompt }) {
+// Keep in sync with DEMO_BEDROCK_MODELS in chatbot-app/shared/ai-config.ts —
+// both lists must contain the same model IDs or the client will offer models the server rejects.
+const DEMO_BEDROCK_MODELS = new Set([
+  'anthropic.claude-sonnet-4-6',
+]);
+
+async function handleChatStream(transport, { prompt, sessionId, branchId, userId, userEmail, apiKey, provider, model, systemPrompt }) {
 
   // ── 1. Resolve session + branch ──────────────────────────────────────────
   const session = await db.getOrCreateSession(sessionId, userId);
@@ -30,6 +36,7 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
     type:      'metadata',
     sessionId,
     branchId:  activeBranchId,
+    modelId:   resolvedModelId,
   });
 
   // ── 2. Save user message ─────────────────────────────────────────────────
@@ -58,7 +65,10 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
 
   // Security: Bedrock path (no apiKey) always uses the configured model — client cannot override.
   // BYOK paths honour the user's model choice since it's their key and their cost.
-  const safeModel = (!apiKey && !provider) ? null : model;
+  // Exception: demo-allowed users may select from the DEMO_BEDROCK_MODELS allowlist above.
+  const userAllowed = userEmail && config.demoModels.allowedEmails.includes(userEmail);
+  const bedrockModelOverride = userAllowed && model && DEMO_BEDROCK_MODELS.has(model) ? model : null;
+  const safeModel = bedrockModelOverride || ((!apiKey && !provider) ? null : model);
 
   const streamOptions = {
     modelId:      safeModel    || undefined,

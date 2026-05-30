@@ -1,9 +1,6 @@
 'use strict';
 
-const { verifyAuth }       = require('./middleware/auth');
-const { handleChatStream } = require('./handlers/chat');
-const { createTransport }  = require('./utils/transport');
-const { parseRequest }     = require('./utils/request');
+const { runChatRequest } = require('./run-chat-request');
 
 /**
  * Lambda Function URL handler with response streaming.
@@ -21,7 +18,11 @@ const { parseRequest }     = require('./utils/request');
  * Error lines:
  *   {"type":"error","message":"Unauthorized: ..."}
  *
- * Note: CORS is handled by Function URL configuration, not in code.
+ * This file is ONLY the Lambda adapter — it wires the awslambda response stream
+ * and hands off. The request lifecycle (auth → parse → stream) lives in
+ * run-chat-request.js, shared with the local dev server.
+ *
+ * Note: CORS is handled by Function URL configuration.
  */
 exports.handler = awslambda.streamifyResponse(async (event, responseStream) => {
   const metadata = {
@@ -29,38 +30,11 @@ exports.handler = awslambda.streamifyResponse(async (event, responseStream) => {
     headers: { 'Content-Type': 'application/x-ndjson' },
   };
   responseStream = awslambda.HttpResponseStream.from(responseStream, metadata);
-  const transport = createTransport('functionUrl', { responseStream });
+  const send = (payload) => responseStream.write(JSON.stringify(payload) + '\n');
 
-  // ── Auth ─────────────────────────────────────────────────────────────────
-  let userId;
-  let userEmail = null;
   try {
-    const payload = await verifyAuth(event.headers);
-    userId = payload.sub;
-    userEmail = payload.username ?? null;
-  } catch (err) {
-    transport.send({ type: 'error', message: err.message });
-    transport.end();
-    return;
-  }
-
-  // ── Parse request ─────────────────────────────────────────────────────────
-  let parsed;
-  try {
-    parsed = parseRequest(event);
-  } catch (err) {
-    transport.send({ type: 'error', message: err.message });
-    transport.end();
-    return;
-  }
-
-  // ── Stream chat ───────────────────────────────────────────────────────────
-  try {
-    await handleChatStream(transport, { ...parsed, userId, userEmail });
-  } catch (err) {
-    console.error('[handler] Unhandled error:', err);
-    transport.send({ type: 'error', message: 'Internal server error' });
+    await runChatRequest(send, event);
   } finally {
-    transport.end();
+    responseStream.end();
   }
 });

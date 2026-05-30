@@ -4,23 +4,35 @@ require('dotenv').config();
 
 /**
  * Local HTTP server that wraps the Lambda handler for frontend dev.
- * Does NOT use awslambda globals — calls handleChatStream directly.
+ *
+ * Does NOT use the awslambda globals. It builds a Lambda-style event from the
+ * raw HTTP request and runs the exact same request lifecycle as production
+ * (src/run-chat-request.js), so the request shape and NDJSON stream are
+ * identical to the deployed Function URL.
+ *
+ * This file only owns HTTP concerns: method routing, CORS, and reading the
+ * request body. Auth, parsing, and streaming live in run-chat-request.js.
  */
 
-const http                               = require('http');
-const { verifyAuth }                     = require('../src/middleware/auth');
-const { handleChatStream }               = require('../src/handlers/chat');
-const { FunctionUrlTransport }           = require('../src/utils/transport');
-const { parseRequest, streamingHeaders } = require('../src/utils/request');
+const http               = require('http');
+const { runChatRequest } = require('../src/run-chat-request');
 
 const PORT = process.env.PORT || 4000;
+
+// ─── Response headers ─────────────────────────────────────────────────────────
+
+const STREAMING_HEADERS = {
+  'Content-Type':           'application/x-ndjson',
+  'Transfer-Encoding':      'chunked',
+  'X-Content-Type-Options': 'nosniff',
+};
 
 // ─── CORS headers ─────────────────────────────────────────────────────────────
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin':  process.env.CORS_ORIGIN || '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Id-Token',
 };
 
 // ─── Request handler ──────────────────────────────────────────────────────────
@@ -42,46 +54,20 @@ async function handler(req, res) {
   for await (const chunk of req) chunks.push(chunk);
   const rawBody = Buffer.concat(chunks).toString('utf-8');
 
-  // Build a minimal Lambda-style event so parseRequest works unchanged
+  // Build a minimal Lambda-style event so the shared lifecycle works unchanged
   const event = {
     body:            rawBody,
     isBase64Encoded: false,
     headers:         req.headers,
   };
 
-  res.writeHead(200, { ...CORS_HEADERS, ...streamingHeaders() });
+  res.writeHead(200, { ...CORS_HEADERS, ...STREAMING_HEADERS });
 
-  const transport = new FunctionUrlTransport(res);
-
-  // ── Auth ──────────────────────────────────────────────────────────────────
-  let userId;
+  const send = (payload) => res.write(JSON.stringify(payload) + '\n');
   try {
-    const payload = await verifyAuth(event.headers);
-    userId = payload.sub;
-  } catch (err) {
-    transport.send({ type: 'error', message: err.message });
-    transport.end();
-    return;
-  }
-
-  // ── Parse ─────────────────────────────────────────────────────────────────
-  let parsed;
-  try {
-    parsed = parseRequest(event);
-  } catch (err) {
-    transport.send({ type: 'error', message: err.message });
-    transport.end();
-    return;
-  }
-
-  // ── Stream ────────────────────────────────────────────────────────────────
-  try {
-    await handleChatStream(transport, { ...parsed, userId });
-  } catch (err) {
-    console.error('[local-server] Unhandled error:', err);
-    transport.send({ type: 'error', message: 'Internal server error' });
+    await runChatRequest(send, event);
   } finally {
-    transport.end();
+    res.end();
   }
 }
 

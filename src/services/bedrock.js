@@ -1,5 +1,18 @@
 'use strict';
 
+/**
+ * AWS Bedrock streaming adapter — the default provider.
+ *
+ * Used whenever a request has no BYOK apiKey. Calls Bedrock's ConverseStream
+ * API and yields a uniform chunk stream — {type:'delta'|'done'|'error'} — so
+ * the chat handler treats every provider identically.
+ *
+ * Authentication is the Lambda's IAM role (not a per-user key), so the client
+ * is a module-level singleton reused across warm invocations. Token usage
+ * arrives in a metadata event that fires AFTER the text, so 'done' is yielded
+ * only once the whole stream has drained.
+ */
+
 const {
   BedrockRuntimeClient,
   ConverseStreamCommand,
@@ -17,9 +30,9 @@ function buildBedrockMessages(dbMessages) {
 }
 
 async function* streamBedrockResponse(historyMessages, userPrompt, options = {}) {
-  const modelId      = options.modelId      || config.bedrock.modelId;
-  const maxTokens    = options.maxTokens    || config.bedrock.maxTokens;
-  const systemPrompt = options.systemPrompt || config.bedrock.systemPrompt;
+  const modelId      = options.modelId  || config.bedrock.modelId;
+  const maxTokens    = options.maxTokens || config.bedrock.maxTokens;
+  const systemPrompt = options.systemPrompt;
 
   const messages = [
     ...buildBedrockMessages(historyMessages),
@@ -28,7 +41,7 @@ async function* streamBedrockResponse(historyMessages, userPrompt, options = {})
 
   const command = new ConverseStreamCommand({
     modelId,
-    system: [{ text: systemPrompt }],
+    ...(systemPrompt && { system: [{ text: systemPrompt }] }),
     messages,
     inferenceConfig: {
       maxTokens,

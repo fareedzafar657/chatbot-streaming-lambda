@@ -1,5 +1,18 @@
 'use strict';
 
+/**
+ * Google Gemini streaming adapter (BYOK path).
+ *
+ * Turns DynamoDB message rows into Gemini's "contents" format (note: Gemini
+ * uses the role "model", not "assistant") and yields a uniform chunk stream —
+ * {type:'delta'|'done'|'error'} — so the chat handler treats every provider
+ * identically.
+ *
+ * Reached only when the request carries the user's own apiKey and
+ * provider:"gemini". A fresh client is created per request on purpose: a
+ * client is bound to one user's key and must never be reused across users.
+ */
+
 const { GoogleGenAI } = require('@google/genai');
 const config          = require('../config');
 
@@ -17,9 +30,9 @@ function buildGeminiContents(dbMessages, userPrompt) {
 
 async function* streamGeminiResponse(historyMessages, userPrompt, options = {}) {
   const { apiKey } = options;
-  const modelId      = options.modelId      || 'gemini-2.5-flash';
+  const modelId      = options.modelId      || config.gemini.defaultModel;
   const maxTokens    = options.maxTokens    || config.bedrock.maxTokens;
-  const systemPrompt = options.systemPrompt || config.bedrock.systemPrompt;
+  const systemPrompt = options.systemPrompt;
 
   const ai = new GoogleGenAI({ apiKey });
 
@@ -28,8 +41,8 @@ async function* streamGeminiResponse(historyMessages, userPrompt, options = {}) 
       model:    modelId,
       contents: buildGeminiContents(historyMessages, userPrompt),
       config: {
-        maxOutputTokens:   maxTokens,
-        systemInstruction: systemPrompt,
+        maxOutputTokens: maxTokens,
+        ...(systemPrompt && { systemInstruction: systemPrompt }),
       },
     });
 

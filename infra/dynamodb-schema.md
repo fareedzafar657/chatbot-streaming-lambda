@@ -33,7 +33,8 @@ GSI 1: sessionId-createdAt-index
 GSI 2: branchId-createdAt-index
   PK:   branchId (String)
   SK:   createdAt (String)
-  Use:  List all messages in a branch ordered by time (used by FastAPI /history)
+  Use:  List all messages in a branch ordered by time — used by both this
+        streaming Lambda (getActiveHistoryForBranch) and the FastAPI /history endpoint
         Query: KeyConditionExpression = "branchId = :bid"
 
 GSI 3: userId-createdAt-index
@@ -47,7 +48,11 @@ TTL:  Not set by default. Optionally add `expiresAt` (Number, epoch seconds)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 TABLE 2: chatbot_branches
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-Purpose: Branch tree metadata. Each branch is a curated view of messages.
+Purpose: Branch tree metadata. Messages are NOT stored here — each message row
+         carries its own `branchId` and `createdAt`. Ordering is by `createdAt`
+         via the branchId-createdAt-index GSI on the messages table. Forking
+         duplicates the selected source messages into new rows with the new branchId —
+         no message row is ever shared between two branches.
 
 Primary Key:
   PK:  branchId (String)  — uuid, e.g. "branch_7c1b..."
@@ -57,7 +62,6 @@ Attributes:
   sessionId      String    parent session
   parentBranchId String?   null for trunk/main branch
   parentMsgId    String?   the message after which this fork was created
-  selectedMsgIds List<String>  ordered list of msgIds fed to Bedrock
   label          String    human label, e.g. "main", "fork-1715..."
   createdAt      String    ISO 8601
 
@@ -103,8 +107,9 @@ QUERY PATTERNS SUMMARY
   Get user sessions (recent first)    sessions / userId-GSI           userId
   Stop a message                      messages (main) UpdateItem      msgId
   Edit a message                      messages (main) UpdateItem      msgId
-  Fork a branch                       branches (main) PutItem         new branchId
-  Append msg to branch                branches (main) UpdateItem      branchId
+  Fork a branch (REST API)            branches PutItem + messages     branchId + N new msgIds
+                                      PutItem ×N (duplicate rows)
+  Save a message (streaming Lambda)   messages (main) PutItem         msgId
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 AWS CLI — CREATE TABLES (quick setup)

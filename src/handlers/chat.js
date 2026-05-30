@@ -1,18 +1,61 @@
 'use strict';
 
+/**
+ * Chat turn orchestrator — the heart of a request.
+ *
+ * Given a parsed request and a Transport, this runs one full chat turn:
+ * resolve the session and branch, enforce branch ownership, pick the model,
+ * save the user message, load trimmed history, stream the model's reply, and
+ * persist the assistant message. It speaks only to the Transport interface,
+ * so it has no idea which wire protocol carries the bytes.
+ *
+ * It does NOT authenticate or parse the body — that happens upstream in
+ * run-chat-request.js. It does NOT talk to AI SDKs or DynamoDB directly —
+ * that lives in services/.
+ */
+
 const { streamBedrockResponse }   = require('../services/bedrock');
 const { streamAnthropicResponse } = require('../services/anthropic');
 const { streamGeminiResponse }    = require('../services/gemini');
 const db                          = require('../services/dynamodb');
 const config                      = require('../config');
 
-// Keep in sync with DEMO_BEDROCK_MODELS in chatbot-app/shared/ai-config.ts —
-// both lists must contain the same model IDs or the client will offer models the server rejects.
-const DEMO_BEDROCK_MODELS = new Set([
-  'anthropic.claude-sonnet-4-6',
-]);
+// ─── Model resolution ──────────────────────────────────────────────────────────
 
-async function handleChatStream(transport, { prompt, sessionId, branchId, userId, userEmail, apiKey, provider, model, systemPrompt }) {
+/**
+ * Decide which model a request runs on. Returns two values:
+ *  - override: the model id passed to the provider. null means "use the
+ *    provider's own default".
+ *  - recorded: the concrete model id saved to DynamoDB for usage tracking —
+ *    always a real id, never null.
+ *
+ * Security: on the plain Bedrock path (no apiKey) the client cannot choose the
+ * model. The one exception is the demo allowlist — a demo-approved user may
+ * pick a model from config.demoModels.bedrockModels. BYOK paths honour the
+ * client's model choice since it is their key and their cost.
+ */
+function resolveModel({ apiKey, provider, model, userEmail }) {
+  const isByok = Boolean(apiKey);
+
+  const isDemoUser   = Boolean(userEmail) && config.demoModels.allowedEmails.includes(userEmail);
+  const demoOverride = !isByok && isDemoUser && model && config.demoModels.bedrockModels.includes(model)
+    ? model
+    : null;
+
+  const override = demoOverride || (isByok ? model : null);
+
+  const recorded =
+    override                 ? override :
+    provider === 'anthropic' ? config.anthropic.defaultModel :
+    provider === 'gemini'    ? config.gemini.defaultModel :
+                               config.bedrock.modelId;
+
+  return { override, recorded };
+}
+
+// ─── Chat turn ─────────────────────────────────────────────────────────────────
+
+async function handleChatStream(send, { prompt, sessionId, branchId, userId, userEmail, apiKey, provider, model, systemPrompt }) {
 
   // ── 1. Resolve session + branch ──────────────────────────────────────────
   const session = await db.getOrCreateSession(sessionId, userId);
@@ -23,23 +66,26 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
   if (branchId && branchId !== session.activeBranchId) {
     const branch = await db.getBranch(branchId);
     if (branch.sessionId !== sessionId) {
-      transport.send({ type: 'error', message: 'Forbidden' });
-      transport.end();
+      send({ type: 'error', message: 'Forbidden' });
       return;
     }
   }
 
-  const activeBranchId = branchId || session.activeBranchId;
+  const activeBranchId = session.activeBranchId;
 
-  // Send metadata immediately so the client knows IDs before tokens arrive
-  transport.send({
+  // ── 2. Resolve model + send metadata ─────────────────────────────────────
+  const { override: modelOverride, recorded: resolvedModelId } =
+    resolveModel({ apiKey, provider, model, userEmail });
+
+  // Send metadata immediately so the client knows the IDs before tokens arrive
+  send({
     type:      'metadata',
     sessionId,
     branchId:  activeBranchId,
     modelId:   resolvedModelId,
   });
 
-  // ── 2. Save user message ─────────────────────────────────────────────────
+  // ── 3. Save user message ─────────────────────────────────────────────────
   const userMsg = await db.saveUserMessage({
     sessionId,
     branchId: activeBranchId,
@@ -47,12 +93,12 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
     userId,
   });
 
-  transport.send({
+  send({
     type:  'userMessage',
     msgId: userMsg.msgId,
   });
 
-  // ── 3. Load active history ───────────────────────────────────────────────
+  // ── 4. Load active history ───────────────────────────────────────────────
   const history = await db.getActiveHistoryForBranch(
     activeBranchId,
     config.history.maxMessages,
@@ -61,33 +107,17 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
 
   const priorHistory = history.filter(m => m.msgId !== userMsg.msgId);
 
-  // ── 4. Select provider and stream response ───────────────────────────────
-
-  // Security: Bedrock path (no apiKey) always uses the configured model — client cannot override.
-  // BYOK paths honour the user's model choice since it's their key and their cost.
-  // Exception: demo-allowed users may select from the DEMO_BEDROCK_MODELS allowlist above.
-  const userAllowed = userEmail && config.demoModels.allowedEmails.includes(userEmail);
-  const bedrockModelOverride = userAllowed && model && DEMO_BEDROCK_MODELS.has(model) ? model : null;
-  const safeModel = bedrockModelOverride || ((!apiKey && !provider) ? null : model);
-
-  const streamOptions = {
-    modelId:      safeModel    || undefined,
-    systemPrompt: systemPrompt || undefined,
-    maxTokens:    config.bedrock.maxTokens,
-    apiKey,
-  };
-
-  // Resolve the modelId saved to DynamoDB for usage tracking
-  const resolvedModelId =
-    safeModel                      ? safeModel :
-    provider === 'anthropic'       ? 'claude-haiku-4-5-20251001' :
-    provider === 'gemini'          ? 'gemini-2.5-flash' :
-    config.bedrock.modelId;
+  // ── 5. Stream response ───────────────────────────────────────────────────
 
   // All AI providers require conversation history to start with a user turn.
   // If the branch starts with a compaction summary (assistant role), inject its
   // content into the system prompt so it acts as context without breaking the API contract.
-  const effectiveOptions = { ...streamOptions };
+  const effectiveOptions = {
+    modelId:      modelOverride || undefined,
+    systemPrompt: systemPrompt  || undefined,
+    maxTokens:    config.bedrock.maxTokens,
+    apiKey,
+  };
   let historyForProvider = priorHistory;
   if (priorHistory.length > 0 && priorHistory[0].role === 'assistant') {
     const ctx = `[Context from previous conversation]\n${priorHistory[0].content}`;
@@ -109,10 +139,11 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
 
   try {
     for await (const chunk of stream) {
+      console.log('chunkchunk',chunk)
 
       if (chunk.type === 'delta') {
         fullText += chunk.text;
-        transport.send({ type: 'delta', text: chunk.text });
+        send({ type: 'delta', text: chunk.text });
       }
 
       else if (chunk.type === 'done') {
@@ -122,16 +153,16 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
 
       else if (chunk.type === 'error') {
         hadError = true;
-        transport.send({ type: 'error', message: chunk.error });
+        send({ type: 'error', message: chunk.error });
       }
     }
   } catch (err) {
     hadError = true;
-    transport.send({ type: 'error', message: 'Bedrock streaming failed' });
-    console.error('[handleChatStream] Bedrock error:', err);
+    send({ type: 'error', message: 'Model streaming failed' });
+    console.error('[handleChatStream] streaming error:', err);
   }
 
-  // ── 5. Persist assistant message ─────────────────────────────────────────
+  // ── 6. Persist assistant message ─────────────────────────────────────────
   if (fullText.length > 0) {
     const assistantMsg = await db.saveAssistantMessage({
       sessionId,
@@ -144,7 +175,7 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
       userId,
     });
 
-    transport.send({
+    send({
       type:         'done',
       msgId:        assistantMsg.msgId,
       state:        assistantMsg.state,
@@ -152,7 +183,7 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
       outputTokens,
     });
   } else if (!hadError) {
-    transport.send({ type: 'done', msgId: null, inputTokens, outputTokens });
+    send({ type: 'done', msgId: null, inputTokens, outputTokens });
   }
 }
 

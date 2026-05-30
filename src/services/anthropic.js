@@ -1,5 +1,17 @@
 'use strict';
 
+/**
+ * Anthropic streaming adapter (BYOK path).
+ *
+ * Turns DynamoDB message rows into the Anthropic SDK's message format and
+ * yields a uniform chunk stream — {type:'delta'|'done'|'error'} — so the chat
+ * handler treats every provider identically.
+ *
+ * Reached only when the request carries the user's own apiKey and
+ * provider:"anthropic". A fresh client is created per request on purpose: a
+ * client is bound to one user's key and must never be reused across users.
+ */
+
 const Anthropic = require('@anthropic-ai/sdk');
 const config    = require('../config');
 
@@ -14,9 +26,9 @@ function buildAnthropicMessages(dbMessages, userPrompt) {
 
 async function* streamAnthropicResponse(historyMessages, userPrompt, options = {}) {
   const { apiKey } = options;
-  const modelId      = options.modelId      || 'claude-haiku-4-5-20251001';
+  const modelId      = options.modelId      || config.anthropic.defaultModel;
   const maxTokens    = options.maxTokens    || config.bedrock.maxTokens;
-  const systemPrompt = options.systemPrompt || config.bedrock.systemPrompt;
+  const systemPrompt = options.systemPrompt;
 
   const client = new Anthropic({ apiKey });
 
@@ -24,7 +36,7 @@ async function* streamAnthropicResponse(historyMessages, userPrompt, options = {
     const stream = client.messages.stream({
       model:      modelId,
       max_tokens: maxTokens,
-      system:     systemPrompt,
+      ...(systemPrompt && { system: systemPrompt }),
       messages:   buildAnthropicMessages(historyMessages, userPrompt),
     });
 

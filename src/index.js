@@ -1,7 +1,6 @@
 'use strict';
 
-const { createTransport } = require('./utils/transport');
-const { runChatRequest }  = require('./run-chat-request');
+const { runChatRequest } = require('./run-chat-request');
 
 /**
  * Lambda Function URL handler with response streaming.
@@ -20,10 +19,10 @@ const { runChatRequest }  = require('./run-chat-request');
  *   {"type":"error","message":"Unauthorized: ..."}
  *
  * This file is ONLY the Lambda adapter — it wires the awslambda response stream
- * into a Transport and hands off. The request lifecycle (auth → parse → stream)
- * lives in run-chat-request.js, shared with the local dev server.
+ * and hands off. The request lifecycle (auth → parse → stream) lives in
+ * run-chat-request.js, shared with the local dev server.
  *
- * Note: CORS is handled by Function URL configuration, not in code.
+ * Note: CORS is handled by Function URL configuration.
  */
 exports.handler = awslambda.streamifyResponse(async (event, responseStream) => {
   const metadata = {
@@ -31,11 +30,11 @@ exports.handler = awslambda.streamifyResponse(async (event, responseStream) => {
     headers: { 'Content-Type': 'application/x-ndjson' },
   };
   responseStream = awslambda.HttpResponseStream.from(responseStream, metadata);
-  const transport = createTransport('functionUrl', { responseStream });
+  const send = (payload) => responseStream.write(JSON.stringify(payload) + '\n');
 
   try {
-    await runChatRequest(transport, event);
+    await runChatRequest(send, event);
   } finally {
-    transport.end();
+    responseStream.end();
   }
 });

@@ -14,19 +14,25 @@ require('dotenv').config();
  * request body. Auth, parsing, and streaming live in run-chat-request.js.
  */
 
-const http                    = require('http');
-const { FunctionUrlTransport } = require('../src/utils/transport');
-const { runChatRequest }       = require('../src/run-chat-request');
-const { streamingHeaders }     = require('../src/utils/request');
+const http               = require('http');
+const { runChatRequest } = require('../src/run-chat-request');
 
 const PORT = process.env.PORT || 4000;
+
+// ─── Response headers ─────────────────────────────────────────────────────────
+
+const STREAMING_HEADERS = {
+  'Content-Type':           'application/x-ndjson',
+  'Transfer-Encoding':      'chunked',
+  'X-Content-Type-Options': 'nosniff',
+};
 
 // ─── CORS headers ─────────────────────────────────────────────────────────────
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin':  process.env.CORS_ORIGIN || '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Id-Token',
 };
 
 // ─── Request handler ──────────────────────────────────────────────────────────
@@ -55,13 +61,13 @@ async function handler(req, res) {
     headers:         req.headers,
   };
 
-  res.writeHead(200, { ...CORS_HEADERS, ...streamingHeaders() });
+  res.writeHead(200, { ...CORS_HEADERS, ...STREAMING_HEADERS });
 
-  const transport = new FunctionUrlTransport(res);
+  const send = (payload) => res.write(JSON.stringify(payload) + '\n');
   try {
-    await runChatRequest(transport, event);
+    await runChatRequest(send, event);
   } finally {
-    transport.end();
+    res.end();
   }
 }
 

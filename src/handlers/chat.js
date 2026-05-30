@@ -55,7 +55,7 @@ function resolveModel({ apiKey, provider, model, userEmail }) {
 
 // ─── Chat turn ─────────────────────────────────────────────────────────────────
 
-async function handleChatStream(transport, { prompt, sessionId, branchId, userId, userEmail, apiKey, provider, model, systemPrompt }) {
+async function handleChatStream(send, { prompt, sessionId, branchId, userId, userEmail, apiKey, provider, model, systemPrompt }) {
 
   // ── 1. Resolve session + branch ──────────────────────────────────────────
   const session = await db.getOrCreateSession(sessionId, userId);
@@ -66,20 +66,19 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
   if (branchId && branchId !== session.activeBranchId) {
     const branch = await db.getBranch(branchId);
     if (branch.sessionId !== sessionId) {
-      transport.send({ type: 'error', message: 'Forbidden' });
-      transport.end();
+      send({ type: 'error', message: 'Forbidden' });
       return;
     }
   }
 
-  const activeBranchId = branchId || session.activeBranchId;
+  const activeBranchId = session.activeBranchId;
 
   // ── 2. Resolve model + send metadata ─────────────────────────────────────
   const { override: modelOverride, recorded: resolvedModelId } =
     resolveModel({ apiKey, provider, model, userEmail });
 
   // Send metadata immediately so the client knows the IDs before tokens arrive
-  transport.send({
+  send({
     type:      'metadata',
     sessionId,
     branchId:  activeBranchId,
@@ -94,7 +93,7 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
     userId,
   });
 
-  transport.send({
+  send({
     type:  'userMessage',
     msgId: userMsg.msgId,
   });
@@ -110,17 +109,15 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
 
   // ── 5. Stream response ───────────────────────────────────────────────────
 
-  const streamOptions = {
+  // All AI providers require conversation history to start with a user turn.
+  // If the branch starts with a compaction summary (assistant role), inject its
+  // content into the system prompt so it acts as context without breaking the API contract.
+  const effectiveOptions = {
     modelId:      modelOverride || undefined,
     systemPrompt: systemPrompt  || undefined,
     maxTokens:    config.bedrock.maxTokens,
     apiKey,
   };
-
-  // All AI providers require conversation history to start with a user turn.
-  // If the branch starts with a compaction summary (assistant role), inject its
-  // content into the system prompt so it acts as context without breaking the API contract.
-  const effectiveOptions = { ...streamOptions };
   let historyForProvider = priorHistory;
   if (priorHistory.length > 0 && priorHistory[0].role === 'assistant') {
     const ctx = `[Context from previous conversation]\n${priorHistory[0].content}`;
@@ -142,10 +139,11 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
 
   try {
     for await (const chunk of stream) {
+      console.log('chunkchunk',chunk)
 
       if (chunk.type === 'delta') {
         fullText += chunk.text;
-        transport.send({ type: 'delta', text: chunk.text });
+        send({ type: 'delta', text: chunk.text });
       }
 
       else if (chunk.type === 'done') {
@@ -155,12 +153,12 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
 
       else if (chunk.type === 'error') {
         hadError = true;
-        transport.send({ type: 'error', message: chunk.error });
+        send({ type: 'error', message: chunk.error });
       }
     }
   } catch (err) {
     hadError = true;
-    transport.send({ type: 'error', message: 'Model streaming failed' });
+    send({ type: 'error', message: 'Model streaming failed' });
     console.error('[handleChatStream] streaming error:', err);
   }
 
@@ -177,7 +175,7 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
       userId,
     });
 
-    transport.send({
+    send({
       type:         'done',
       msgId:        assistantMsg.msgId,
       state:        assistantMsg.state,
@@ -185,7 +183,7 @@ async function handleChatStream(transport, { prompt, sessionId, branchId, userId
       outputTokens,
     });
   } else if (!hadError) {
-    transport.send({ type: 'done', msgId: null, inputTokens, outputTokens });
+    send({ type: 'done', msgId: null, inputTokens, outputTokens });
   }
 }
 

@@ -30,9 +30,9 @@ function buildBedrockMessages(dbMessages) {
 }
 
 async function* streamBedrockResponse(historyMessages, userPrompt, options = {}) {
-  const modelId      = options.modelId      || config.bedrock.modelId;
-  const maxTokens    = options.maxTokens    || config.bedrock.maxTokens;
-  const systemPrompt = options.systemPrompt || config.bedrock.systemPrompt;
+  const modelId      = options.modelId  || config.bedrock.modelId;
+  const maxTokens    = options.maxTokens || config.bedrock.maxTokens;
+  const systemPrompt = options.systemPrompt;
 
   const messages = [
     ...buildBedrockMessages(historyMessages),
@@ -41,7 +41,7 @@ async function* streamBedrockResponse(historyMessages, userPrompt, options = {})
 
   const command = new ConverseStreamCommand({
     modelId,
-    system: [{ text: systemPrompt }],
+    ...(systemPrompt && { system: [{ text: systemPrompt }] }),
     messages,
     inferenceConfig: {
       maxTokens,

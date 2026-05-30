@@ -22,8 +22,6 @@ const config = {
     maxTokens:    Number.parseInt(process.env.BEDROCK_MAX_TOKENS || '4096', 10),
     temperature:  Number.parseFloat(process.env.BEDROCK_TEMPERATURE || '0.7'),
     topP:         Number.parseFloat(process.env.BEDROCK_TOP_P || '0.9'),
-    systemPrompt: process.env.SYSTEM_PROMPT ||
-      'You are a helpful, concise assistant. Respond clearly and directly.',
   },
 
   // ─── BYOK provider defaults ──────────────────────────────────────────────
@@ -43,9 +41,9 @@ const config = {
 
   // ─── DynamoDB tables ─────────────────────────────────────────────────────
   dynamo: {
-    messagesTable: process.env.DYNAMO_MESSAGES_TABLE || 'chatbot_messages',
-    branchesTable: process.env.DYNAMO_BRANCHES_TABLE || 'chatbot_branches',
-    sessionsTable: process.env.DYNAMO_SESSIONS_TABLE  || 'chatbot_sessions',
+    messagesTable: 'chatbot_messages',
+    branchesTable: 'chatbot_branches',
+    sessionsTable: 'chatbot_sessions',
   },
 
   // ─── History trimming ────────────────────────────────────────────────────
@@ -55,15 +53,11 @@ const config = {
     maxTokenBudget: Number.parseInt(process.env.HISTORY_MAX_TOKEN_BUDGET || '60000', 10),
   },
 
-  cors: {
-    origin: process.env.CORS_ORIGIN || '*',
-  },
-
   // ─── Demo models ─────────────────────────────────────────────────────────
   // Demo-approved users may pick a Bedrock model from `bedrockModels` on the
   // non-BYOK path. `allowedEmails` empty = feature disabled for everyone.
   // `bedrockModels` must stay in sync with DEMO_BEDROCK_MODELS in
-  // chatbot-app/shared/ai-config.ts — see docs/CODE-REVIEW.md.
+  // chatbot-app/shared/ai-config.ts
   demoModels: {
     allowedEmails: process.env.DEMO_MODELS_ALLOWED_EMAILS
       ? process.env.DEMO_MODELS_ALLOWED_EMAILS.split(',').map((e) => e.trim()).filter(Boolean)

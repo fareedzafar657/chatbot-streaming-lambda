@@ -38,7 +38,7 @@ Everything below is one request flowing through the system, top to bottom:
       ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │ src/index.js              THE LAMBDA ADAPTER                          │
-│   Wraps the AWS response stream in a Transport, then hands off.        │
+│   Wraps the AWS response stream in a send() helper, then hands off.   │
 │   (The local dev server, scripts/local-server.js, is the same idea    │
 │    for an ordinary HTTP server — see section 6.)                       │
 ├──────────────────────────────────────────────────────────────────────┤
@@ -76,8 +76,8 @@ Everything below is one request flowing through the system, top to bottom:
 token. `sessionId` identifies the conversation; everything else is optional.
 
 **`index.js`** is only an *adapter*. AWS hands it a special streaming response object.
-It wraps that object in a `Transport` (see section 5) and immediately delegates — it
-contains no business logic of its own.
+It creates an inline `send` helper that writes one NDJSON line at a time, then
+immediately delegates — it contains no business logic of its own.
 
 **`run-chat-request.js`** is the lifecycle every request follows, no matter how it
 arrived. It does three things in order and stops at the first failure:
@@ -114,17 +114,16 @@ same order a request travels through them.
 
 | # | File | Its job in one breath |
 |---|---|---|
-| 1 | `src/index.js` | The AWS Lambda entry point. Wires the streaming response into a `Transport`, then calls the shared lifecycle. Adapter only — no logic. |
+| 1 | `src/index.js` | The AWS Lambda entry point. Creates an inline `send` helper from the streaming response, then calls the shared lifecycle. Adapter only — no logic. |
 | 2 | `src/run-chat-request.js` | The request lifecycle: verify auth → parse body → run the chat turn. Shared by the Lambda and the local dev server. |
-| 3 | `src/middleware/auth.js` | Verifies the Cognito JWT. Returns the user's identity, or throws a 401. |
+| 3 | `src/middleware/auth.js` | Verifies the Cognito access token (`verifyAuth`) and extracts the user's email from the ID token (`extractEmail`, used for demo-model gating). |
 | 4 | `src/utils/request.js` | Parses and validates the request body. Defines the request shape every other file relies on. |
 | 5 | `src/handlers/chat.js` | The chat turn orchestrator — the heart. Resolves the model, saves messages, streams the reply. |
 | 6 | `src/services/bedrock.js` | Streams from AWS Bedrock — the **default** AI provider. |
 | 7 | `src/services/anthropic.js` | Streams from Anthropic, when the user brings their own key (BYOK). |
 | 8 | `src/services/gemini.js` | Streams from Google Gemini, when the user brings their own key (BYOK). |
-| 9 | `src/services/dynamodb.js` | The data layer. Sessions, branches, messages — every DB read and write. |
-| 10 | `src/utils/transport.js` | The wire-protocol abstraction. Today: `FunctionUrlTransport`. |
-| 11 | `src/config.js` | Every tunable in one place. Read once at startup; fails fast on missing secrets. |
+| 9 | `src/services/dynamodb.js` | The data layer. Sessions, branches, messages — every DB read and write. History is loaded via the `branchId-createdAt-index` GSI. |
+| 10 | `src/config.js` | Every tunable in one place. Read once at startup; fails fast on missing secrets. |
 | — | `scripts/local-server.js` | A plain HTTP server that runs the exact same lifecycle on your laptop. |
 
 Every one of these files starts with a doc block that says what it does and what it
@@ -136,68 +135,39 @@ deliberately does *not* do — so the file itself is the most up-to-date descrip
 
 The interesting part of the database is that conversations **branch**. Three tables:
 
-| Table | One row is… | Points at |
+| Table | One row is… | Owns / points at |
 |---|---|---|
 | `chatbot_sessions` | one conversation | its currently-active branch |
-| `chatbot_branches` | one path through the conversation | an **ordered list** of message IDs |
-| `chatbot_messages` | one user or assistant message | — |
+| `chatbot_branches` | one branch within a session | metadata only — no message list |
+| `chatbot_messages` | one user or assistant message | the **one** branch it belongs to (`branchId`) |
 
-A **branch** is just an ordered list of message IDs (`selectedMsgIds`). "Forking" a
-conversation — to retry an answer or explore a different direction — creates a new
-branch with its own list, leaving the original untouched. This streaming service only
-ever *reads* branches and *appends* to the active one; creating and editing branches is
-the job of the separate `chatbot-fast-api-lambda` REST API.
+The key fact: **every message row belongs to exactly one branch via its `branchId`
+field.** Forking does **not** share messages by reference — it *duplicates* them. When
+the REST API creates a fork, it reads the selected parent messages and writes brand-new
+rows (new `msgId`s) tagged with the new `branchId`. Ordering is by `createdAt`,
+enforced by the `branchId-createdAt-index` GSI — there is no separate list of IDs on
+the branch row.
+
+This streaming service only ever *appends* to the active branch — one `PutItem` per
+message. Creating branches, editing messages, and cherry-picking are the job of the
+separate `chatbot-fast-api-lambda` REST API.
 
 Two details worth knowing:
 
-- **Atomic writes.** Saving a message and appending its ID to a branch must both
-  happen or neither — so they go in a single DynamoDB `TransactWrite`.
+- **Simple writes.** Each message is saved with a plain `PutItem` — no transaction
+  needed, because the message itself carries its `branchId` and `createdAt`.
 - **History trimming.** A long conversation will not fit in a model's context window.
-  `getActiveHistoryForBranch` keeps only the most recent messages, within both a
-  message-count cap and an *approximate* token budget (it estimates ~4 characters per
-  token — fine for trimming, not used for billing).
+  `getActiveHistoryForBranch` queries the GSI (ordered ascending by `createdAt`), then
+  keeps only the most recent messages within both a message-count cap and an
+  *approximate* token budget (it estimates ~4 characters per token — fine for trimming,
+  not used for billing).
 
 The full schema and the AWS CLI commands to create the tables are in
-[`infra/dynamodb-schema.md`](./infra/dynamodb-schema.md).
+[`infra/dynamodb-schema.md`](../infra/dynamodb-schema.md).
 
 ---
 
-## 5. Key design decisions
-
-**Why a `Transport` abstraction?**
-`chat.js` and the services never touch the response stream directly — they only call
-`transport.send()` and `transport.end()`. All knowledge of *how bytes reach the client*
-lives in `utils/transport.js`. Today there is one transport (`FunctionUrlTransport`).
-Adding another wire protocol later means writing one more class and teaching the
-factory about it — no changes to handlers, services, or the database layer.
-
-**Why three AI providers behind one handler?**
-Bedrock is the **default** and uses the Lambda's own AWS permissions. A user can
-instead "bring their own key" (BYOK) for Anthropic or Gemini by sending an `apiKey` +
-`provider`. Each provider lives in its own service file but exposes the *same* async
-generator shape, so `chat.js` routes to one of three functions and otherwise treats
-them identically.
-
-**Why can't the client pick any model?**
-On the default Bedrock path the model is fixed by `config.js` — a client cannot make
-the service spend money on an expensive model. The two exceptions are explicit: a BYOK
-caller may choose their own model (their key, their cost), and a small allowlist of
-"demo" users may pick from `config.demoModels`. All of this lives in one place —
-`resolveModel()` at the top of `chat.js`.
-
-**Why does `config.js` throw on startup?**
-If a required secret (a Cognito ID) is missing, the function fails *immediately* on
-cold start with a clear message — instead of limping along and failing confusingly
-halfway through a real user's request. Fail fast, fail loud.
-
-**Why one shared lifecycle file?**
-The Lambda (`index.js`) and the local dev server (`local-server.js`) must behave
-identically. If the "auth → parse → stream" sequence were copied into both, they would
-drift apart. `run-chat-request.js` is the single copy; both entry points call it.
-
----
-
-## 6. Running it — Lambda vs. your laptop
+## 5. Running it — Lambda vs. your laptop
 
 The service runs in two places, and they share all the real logic:
 
@@ -211,11 +181,11 @@ The service runs in two places, and they share all the real logic:
 The local server builds a Lambda-style event from the raw HTTP request and calls the
 *same* `runChatRequest`. So the request shape and the NDJSON stream you see on
 `http://localhost:4000` are exactly what the deployed Function URL produces. Start it
-with `node scripts/local-server.js` (see the [README](./README.md) for setup).
+with `node scripts/local-server.js` (see the [README](../README.md) for setup).
 
 ---
 
-## 7. What this service deliberately does NOT do
+## 6. What this service deliberately does NOT do
 
 Knowing the boundaries is as important as knowing the contents:
 
@@ -225,17 +195,35 @@ Knowing the boundaries is as important as knowing the contents:
 - **It does not render anything.** The UI is the `chatbot-app` Next.js frontend.
 - **It does not handle CORS in code.** The Lambda Function URL configuration does that
   in production; the local server sets CORS headers itself.
-- **It does not provision infrastructure.** Tables, the Lambda, and Cognito are created
-  manually today — see [`docs/CODE-REVIEW.md`](./docs/CODE-REVIEW.md) for the gap.
 
 ---
 
-## 8. Further reading
+## 8. Sources & further reading
 
-A full, annotated list of the AWS blog post, official docs, and SDK references behind
-every design choice here — plus pointers for *what is possible next* (WebSockets,
-auto-expiring sessions) — is in **[`docs/CODE-REVIEW.md` → Sources & further
-reading](./docs/CODE-REVIEW.md#sources--further-reading)**.
+Every link below was checked while writing this review. Read them to understand *why*
+the service is built the way it is — and what it could become next.
 
-Start with the AWS blog *Serverless strategies for streaming LLM responses* — it is the
-pattern this entire service is built on.
+### Understanding the current design
+
+- **[Serverless strategies for streaming LLM responses](https://aws.amazon.com/blogs/compute/serverless-strategies-for-streaming-llm-responses/)** — the AWS blog post this entire service is modelled on. Start here: it compares Lambda Function URL streaming, API Gateway, and AppSync for streaming LLM output, and explains the trade-offs.
+- **[Response streaming for Lambda functions](https://docs.aws.amazon.com/lambda/latest/dg/configuration-response-streaming.html)** — why streaming exists: faster time-to-first-byte and a 200 MB response cap (vs. 6 MB buffered). The behaviour behind `index.js`.
+- **[Writing response streaming-enabled functions](https://docs.aws.amazon.com/lambda/latest/dg/config-rs-write-functions.html)** — the `awslambda.streamifyResponse()` and `HttpResponseStream` APIs used in `src/index.js`.
+- **[Creating and managing Lambda function URLs](https://docs.aws.amazon.com/lambda/latest/dg/urls-configuration.html)** — the HTTPS endpoint and CORS configuration this service is invoked through.
+- **[Amazon Bedrock — ConverseStream API](https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_ConverseStream.html)** — the streaming call in `services/bedrock.js`. Note: it requires the `bedrock:InvokeModelWithResponseStream` permission — directly relevant to finding **H1**.
+- **[Amazon Bedrock — Converse API guide](https://docs.aws.amazon.com/bedrock/latest/userguide/conversation-inference.html)** — one message format that works across all Bedrock models; explains the `messages` / `system` / `inferenceConfig` shape.
+- **[aws-jwt-verify](https://github.com/awslabs/aws-jwt-verify)** — the official AWS library used in `middleware/auth.js`. Explains the `CognitoJwtVerifier`, JWK caching, and why the verifier is a singleton.
+- **[Amazon Cognito — Understanding the access token](https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-the-access-token.html)** — what the Bearer token contains (`sub`, `username`) and its default 1-hour lifetime.
+- **[Amazon Cognito — Verifying a JWT](https://docs.aws.amazon.com/cognito/latest/developerguide/amazon-cognito-user-pools-using-tokens-verifying-a-jwt.html)** — the verification steps `aws-jwt-verify` performs for you.
+- **[Anthropic — Streaming messages](https://docs.anthropic.com/en/docs/build-with-claude/streaming)** — the streaming event model behind `services/anthropic.js`.
+- **[Anthropic TypeScript SDK](https://github.com/anthropics/anthropic-sdk-typescript)** — see `helpers.md` for `messages.stream()` and `finalMessage()`, the exact calls in `services/anthropic.js`.
+- **[Google Gen AI JS SDK (`@google/genai`)](https://github.com/googleapis/js-genai)** — the SDK behind `services/gemini.js`; `generateContentStream` and the `usageMetadata` quirk are documented here.
+- **[Gemini API — Generating content](https://ai.google.dev/api/generate-content)** — the `contents` / `role: "model"` format and streaming responses.
+- **[DynamoDB — Query](https://docs.aws.amazon.com/amazondynamodb/latest/APIReference/API_Query.html)** — used by `getActiveHistoryForBranch` to fetch all active messages for a branch, ordered ascending by `createdAt` via the `branchId-createdAt-index` GSI.
+- **[DynamoDB — Global Secondary Indexes](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/GSI.html)** — explains how the `branchId-createdAt-index` GSI enables efficient, ordered history queries without scanning the full messages table.
+- **[NDJSON specification](https://github.com/ndjson/ndjson-spec)** — the "one JSON object per line" wire format. Confirms the `application/x-ndjson` media type used by the transport.
+
+### Exploring what's possible next
+
+- **[API Gateway WebSocket APIs](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-websocket-api.html)** — the natural next step if you want the server to *push* to the client (true bidirectional chat). Explains the `$connect` / `$disconnect` / `$default` routes a future WebSocket transport would need.
+- **[WebSocket APIs — overview](https://docs.aws.amazon.com/apigateway/latest/developerguide/apigateway-websocket-api-overview.html)** — how routing and integrations work, useful for sizing that future migration.
+- **[DynamoDB — Time to Live (TTL)](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/TTL.html)** — a cheap way to auto-expire old sessions, branches, and messages so the tables do not grow forever. Not used today.

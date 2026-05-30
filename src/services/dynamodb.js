@@ -3,30 +3,23 @@
 /**
  * Data access layer — sessions, branches, and messages in DynamoDB.
  *
- * Every read and write of conversation state goes through this file. It owns
- * the branching-history model: a session points at an active branch, and a
- * branch is an ordered list of message IDs (selectedMsgIds). Writes that must
- * not half-apply (save a message + append it to its branch) use a single
- * TransactWrite.
+ * Every read and write done by THIS service goes through this file. Each message
+ * row carries a branchId; history is loaded by querying the branchId-createdAt-index
+ * GSI, ordered ascending by createdAt. Forking (which duplicates message rows into
+ * a new branch) is done by the separate chatbot-fast-api-lambda REST API.
  *
- * getActiveHistoryForBranch also trims history to fit a model's context: it
- * keeps the most recent messages within a message count and an approximate
- * token budget.
+ * getActiveHistoryForBranch trims history to fit a model's context: it keeps the
+ * most recent messages within a message count and an approximate token budget.
  *
- * The client is a module-level singleton reused across warm invocations.
- * Branch forking and message editing (forkBranch, updateMessageState) are
- * exposed here but driven by the separate chatbot-fast-api-lambda REST API.
+ * The DynamoDB client is a module-level singleton reused across warm invocations.
  */
 
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const {
   DynamoDBDocumentClient,
   GetCommand,
-  PutCommand,
-  UpdateCommand,
   QueryCommand,
-  TransactWriteCommand,
-  BatchGetCommand,
+  PutCommand,
 } = require('@aws-sdk/lib-dynamodb');
 const { randomUUID: uuidv4 } = require('crypto');
 const config = require('../config');
@@ -80,7 +73,6 @@ async function getOrCreateSession(sessionId, userId) {
     sessionId,
     parentBranchId: null,
     parentMsgId:    null,
-    selectedMsgIds: [],
     label:          'main',
     createdAt:      now,
   };
@@ -94,52 +86,6 @@ async function getOrCreateSession(sessionId, userId) {
   }));
 
   return session;
-}
-
-// ─── Branches ────────────────────────────────────────────────────────────────
-
-async function getBranch(branchId) {
-  const res = await ddb.send(new GetCommand({
-    TableName: TABLES.branchesTable,
-    Key: { branchId },
-  }));
-  if (!res.Item) throw new Error('Branch not found');
-  return res.Item;
-}
-
-// Fork: the parent branch is preserved intact — only the new branch gets the new selectedMsgIds.
-async function forkBranch({ sessionId, parentBranchId, parentMsgId, selectedMsgIds, label }) {
-  const branchId = `branch_${uuidv4()}`;
-  const now = new Date().toISOString();
-
-  const branch = {
-    branchId,
-    sessionId,
-    parentBranchId,
-    parentMsgId,
-    selectedMsgIds: selectedMsgIds || [],
-    label:          label || `fork-${Date.now()}`,
-    createdAt:      now,
-  };
-
-  await ddb.send(new PutCommand({ TableName: TABLES.branchesTable, Item: branch }));
-  return branch;
-}
-
-function branchAppendTransactItem(branchId, msgId) {
-  return {
-    Update: {
-      TableName: TABLES.branchesTable,
-      Key: { branchId },
-      UpdateExpression: 'SET selectedMsgIds = list_append(if_not_exists(selectedMsgIds, :empty), :ids)',
-      ExpressionAttributeValues: { ':empty': [], ':ids': [msgId] },
-    },
-  };
-}
-
-async function appendMsgToBranch(branchId, msgId) {
-  const { Update } = branchAppendTransactItem(branchId, msgId);
-  await ddb.send(new UpdateCommand(Update));
 }
 
 // ─── Messages ────────────────────────────────────────────────────────────────
@@ -160,14 +106,7 @@ async function saveUserMessage({ sessionId, branchId, content, userId }) {
     updatedAt: now,
   };
 
-  // Save message + append to branch selectedMsgIds atomically
-  await ddb.send(new TransactWriteCommand({
-    TransactItems: [
-      { Put: { TableName: TABLES.messagesTable, Item: item } },
-      branchAppendTransactItem(branchId, msgId),
-    ],
-  }));
-
+  await ddb.send(new PutCommand({ TableName: TABLES.messagesTable, Item: item }));
   return item;
 }
 
@@ -213,62 +152,24 @@ async function saveAssistantMessage({
     updatedAt:    now,
   };
 
-  await ddb.send(new TransactWriteCommand({
-    TransactItems: [
-      { Put: { TableName: TABLES.messagesTable, Item: item } },
-      branchAppendTransactItem(branchId, msgId),
-    ],
-  }));
-
+  await ddb.send(new PutCommand({ TableName: TABLES.messagesTable, Item: item }));
   return item;
 }
 
-async function updateMessageState(msgId, state, editedContent = undefined) {
-  const updates = ['#st = :state', 'updatedAt = :now'];
-  const names  = { '#st': 'state' };
-  const values = { ':state': state, ':now': new Date().toISOString() };
-
-  if (editedContent !== undefined) {
-    updates.push('content = :content');
-    values[':content'] = editedContent;
-  }
-
-  await ddb.send(new UpdateCommand({
-    TableName: TABLES.messagesTable,
-    Key: { msgId },
-    UpdateExpression: `SET ${updates.join(', ')}`,
-    ExpressionAttributeNames: names,
-    ExpressionAttributeValues: values,
-  }));
-}
-
 async function getActiveHistoryForBranch(branchId, maxMessages, maxTokenBudget) {
-  const branch = await getBranch(branchId);
-  const { selectedMsgIds = [] } = branch;
+  // Query messages ordered by createdAt ascending via branchId-createdAt-index GSI
+  const result = await ddb.send(new QueryCommand({
+    TableName:                 TABLES.messagesTable,
+    IndexName:                 'branchId-createdAt-index',
+    KeyConditionExpression:    'branchId = :bid',
+    FilterExpression:          '#st = :active',
+    ExpressionAttributeNames:  { '#st': 'state' },
+    ExpressionAttributeValues: { ':bid': branchId, ':active': MessageState.ACTIVE },
+    ScanIndexForward:          true,
+  }));
 
-  if (selectedMsgIds.length === 0) return [];
-
-  // Batch-get all selected messages in chunks of 100 (DynamoDB BatchGet limit)
-  const chunks = chunkArray(selectedMsgIds, 100);
-  const allItems = [];
-
-  for (const chunk of chunks) {
-    const keys = chunk.map(id => ({ msgId: id }));
-    const result = await ddb.send(new BatchGetCommand({
-      RequestItems: {
-        [TABLES.messagesTable]: { Keys: keys },
-      },
-    }));
-    allItems.push(...(result.Responses?.[TABLES.messagesTable] || []));
-  }
-
-  // Restore original order (BatchGet doesn't guarantee order)
-  const byId = Object.fromEntries(allItems.map(m => [m.msgId, m]));
-  const ordered = selectedMsgIds
-    .map(id => byId[id])
-    .filter(m => m && m.state === MessageState.ACTIVE);
-
-  const capped = ordered.slice(-maxMessages);
+  const all = result.Items ?? [];
+  const capped = all.slice(-maxMessages);
 
   const CHARS_PER_TOKEN_ESTIMATE = 4; // 1 token ≈ 4 chars (varies ±20% by model/language) — used only for history truncation, not billing
 
@@ -284,24 +185,11 @@ async function getActiveHistoryForBranch(branchId, maxMessages, maxTokenBudget) 
   return budgeted;
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function chunkArray(arr, size) {
-  const chunks = [];
-  for (let i = 0; i < arr.length; i += size) {
-    chunks.push(arr.slice(i, i + size));
-  }
-  return chunks;
-}
-
 module.exports = {
   MessageState,
   getOrCreateSession,
   getBranch,
-  forkBranch,
-  appendMsgToBranch,
   saveUserMessage,
   saveAssistantMessage,
-  updateMessageState,
   getActiveHistoryForBranch,
 };

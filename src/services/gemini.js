@@ -32,7 +32,7 @@ async function* streamGeminiResponse(historyMessages, userPrompt, options = {}) 
   const { apiKey } = options;
   const modelId      = options.modelId      || config.gemini.defaultModel;
   const maxTokens    = options.maxTokens    || config.bedrock.maxTokens;
-  const systemPrompt = options.systemPrompt || config.bedrock.systemPrompt;
+  const systemPrompt = options.systemPrompt;
 
   const ai = new GoogleGenAI({ apiKey });
 
@@ -41,8 +41,8 @@ async function* streamGeminiResponse(historyMessages, userPrompt, options = {}) 
       model:    modelId,
       contents: buildGeminiContents(historyMessages, userPrompt),
       config: {
-        maxOutputTokens:   maxTokens,
-        systemInstruction: systemPrompt,
+        maxOutputTokens: maxTokens,
+        ...(systemPrompt && { systemInstruction: systemPrompt }),
       },
     });
 

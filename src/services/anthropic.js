@@ -28,7 +28,7 @@ async function* streamAnthropicResponse(historyMessages, userPrompt, options = {
   const { apiKey } = options;
   const modelId      = options.modelId      || config.anthropic.defaultModel;
   const maxTokens    = options.maxTokens    || config.bedrock.maxTokens;
-  const systemPrompt = options.systemPrompt || config.bedrock.systemPrompt;
+  const systemPrompt = options.systemPrompt;
 
   const client = new Anthropic({ apiKey });
 
@@ -36,7 +36,7 @@ async function* streamAnthropicResponse(historyMessages, userPrompt, options = {
     const stream = client.messages.stream({
       model:      modelId,
       max_tokens: maxTokens,
-      system:     systemPrompt,
+      ...(systemPrompt && { system: systemPrompt }),
       messages:   buildAnthropicMessages(historyMessages, userPrompt),
     });
 

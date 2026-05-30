@@ -15,7 +15,6 @@
 - **Multi-provider AI** — AWS Bedrock (default), Anthropic (BYOK), and Google Gemini (BYOK) in a single handler
 - **Branching conversation history** — full branch tree stored in DynamoDB; each fork is an independent ordered list of message IDs
 - **Cognito JWT auth** — every request is verified against your Cognito User Pool before any AI call is made
-- **Transport-agnostic design** — a thin `Transport` interface decouples streaming logic from the wire protocol
 - **Local dev server** — plain Node.js HTTP server that wraps the same handler logic, no SAM or Docker needed
 - **History trimming** — configurable message count and token-budget caps prevent oversized Bedrock payloads
 - **Usage tracking** — input and output token counts are saved per message for cost monitoring
@@ -29,7 +28,7 @@
 | Runtime | Node.js 22 (AWS Lambda) |
 | Streaming | Lambda Function URL (`awslambda.streamifyResponse`) |
 | Wire format | NDJSON (`application/x-ndjson`) |
-| Default AI | AWS Bedrock (`amazon.nova-pro-v1`) |
+| Default AI | AWS Bedrock (`us.amazon.nova-pro-v1:0` — cross-region inference profile) |
 | BYOK AI | Anthropic SDK, Google GenAI SDK |
 | Auth | AWS Cognito via `aws-jwt-verify` |
 | Database | AWS DynamoDB (`@aws-sdk/lib-dynamodb`) |
@@ -70,16 +69,11 @@ COGNITO_CLIENT_ID=<your-app-client-id>
 # Optional — defaults shown
 AWS_REGION=us-east-1
 PORT=4000
-CORS_ORIGIN=*
-SYSTEM_PROMPT=You are a helpful, concise assistant.
 BEDROCK_MAX_TOKENS=4096
 BEDROCK_TEMPERATURE=0.7
 BEDROCK_TOP_P=0.9
 HISTORY_MAX_MESSAGES=50
 HISTORY_MAX_TOKEN_BUDGET=60000
-DYNAMO_MESSAGES_TABLE=chatbot_messages
-DYNAMO_BRANCHES_TABLE=chatbot_branches
-DYNAMO_SESSIONS_TABLE=chatbot_sessions
 ```
 
 ### 3. Start the local dev server
@@ -178,13 +172,11 @@ scripts/
 └── local-server.js           # Local HTTP dev server (no SAM/Docker)
 
 infra/
-├── dynamodb-schema.md        # Table definitions + AWS CLI create commands
-└── lambda-iam-policy.json    # Minimum IAM policy for the Lambda execution role
+└── dynamodb-schema.md        # Table definitions + AWS CLI create commands
 
 docs/
+├── ARCHITECTURE.md           # How the service works, end to end (start here)
 └── CODE-REVIEW.md            # Cleanup changelog + prioritised review findings
-
-ARCHITECTURE.md               # How the service works, end to end (start here)
 ```
 
 ---
@@ -205,23 +197,23 @@ All tables use `PAY_PER_REQUEST` billing — no capacity planning needed.
 
 ## Deployment
 
-### Lambda Function URL (recommended)
+Push to `dev` — GitHub Actions handles the rest. The workflow in
+`.github/workflows/deploy.yml`:
 
-1. Zip the project (excluding `node_modules` — use a Lambda layer or bundle with esbuild)
-2. Create a Lambda function with the **Node.js 22** runtime
-3. Set the handler to `src/index.handler`
-4. Enable **Response Streaming** on the Function URL
-5. Attach the IAM policy from [`infra/lambda-iam-policy.json`](./infra/lambda-iam-policy.json)
-6. Set all environment variables from [`.env.example`](#2-configure-environment-variables)
+1. Installs production dependencies
+2. Zips `src/` + `node_modules/` + `package.json`
+3. Uploads to the `node-streaming-test` Lambda via AWS CLI
+4. Waits for the update to be live and verifies the configuration
 
-The IAM policy grants the minimum permissions required:
-- `bedrock:InvokeModelWithResponseStream` — token streaming
-- `dynamodb:*` — sessions, branches, messages
-- `logs:*` — CloudWatch log groups
+AWS credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`) must be set as GitHub
+repository secrets. The Lambda itself is created and configured manually in the AWS
+console — CI only updates the function code.
 
 ### Environment variables in Lambda
 
-Set these in the Lambda console under **Configuration → Environment variables**, or in your SAM/CDK template. The `config.js` will throw at cold start if `COGNITO_USER_POOL_ID` or `COGNITO_CLIENT_ID` are missing.
+Set these in the Lambda console under **Configuration → Environment variables**. The
+`config.js` will throw at cold start if `COGNITO_USER_POOL_ID` or `COGNITO_CLIENT_ID`
+are missing.
 
 ---
 
@@ -229,7 +221,7 @@ Set these in the Lambda console under **Configuration → Environment variables*
 
 ### AWS Bedrock (default)
 
-No extra config beyond IAM permissions. The model is set via `BEDROCK_MAX_TOKENS` and defaults to `amazon.nova-pro-v1`. Clients **cannot** override the model on the Bedrock path.
+No extra config beyond IAM permissions. The default model is hardcoded in `src/config.js` as `us.amazon.nova-pro-v1:0` — clients **cannot** override it on the Bedrock path. Inference parameters (`BEDROCK_MAX_TOKENS`, `BEDROCK_TEMPERATURE`, `BEDROCK_TOP_P`) can be tuned via env vars.
 
 ### Anthropic (BYOK)
 
@@ -267,16 +259,11 @@ Each line of the output is a JSON object: `metadata` → `userMessage` → `delt
 | `COGNITO_USER_POOL_ID` | — | **Yes** | Cognito User Pool ID (`us-east-1_XXX`) |
 | `COGNITO_CLIENT_ID` | — | **Yes** | Cognito App Client ID |
 | `AWS_REGION` | `us-east-1` | No | AWS region for Bedrock and DynamoDB |
-| `SYSTEM_PROMPT` | (built-in) | No | Default system prompt injected into every conversation |
 | `BEDROCK_MAX_TOKENS` | `4096` | No | Max output tokens for Bedrock requests |
 | `BEDROCK_TEMPERATURE` | `0.7` | No | Sampling temperature |
 | `BEDROCK_TOP_P` | `0.9` | No | Top-p sampling |
 | `HISTORY_MAX_MESSAGES` | `50` | No | Max messages fetched from DynamoDB before token check |
 | `HISTORY_MAX_TOKEN_BUDGET` | `60000` | No | Approx token budget for conversation history |
-| `DYNAMO_MESSAGES_TABLE` | `chatbot_messages` | No | DynamoDB messages table name |
-| `DYNAMO_BRANCHES_TABLE` | `chatbot_branches` | No | DynamoDB branches table name |
-| `DYNAMO_SESSIONS_TABLE` | `chatbot_sessions` | No | DynamoDB sessions table name |
-| `CORS_ORIGIN` | `*` | No | CORS origin (local server only — Lambda uses Function URL CORS config) |
 | `PORT` | `4000` | No | Local dev server port |
 
 ---

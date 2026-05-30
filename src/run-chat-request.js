@@ -9,26 +9,26 @@
  * local dev server (scripts/local-server.js) — so it lives here once instead
  * of being copied into each.
  *
- * Transport-agnostic: the caller builds the Transport and owns transport.end()
- * (in a finally block). Every failure is reported to the client as an
+ * send: (payload) => void — caller owns the stream lifetime (open before call,
+ * closed in a finally after). Every failure is reported to the client as a
  * {type:'error'} line — this function never throws.
  */
 
-const { verifyAuth }       = require('./middleware/auth');
-const { handleChatStream } = require('./handlers/chat');
-const { parseRequest }     = require('./utils/request');
+const { verifyAuth, extractEmail } = require('./middleware/auth');
+const { handleChatStream }         = require('./handlers/chat');
+const { parseRequest }             = require('./utils/request');
 
-async function runChatRequest(transport, event) {
+async function runChatRequest(send, event) {
 
   // ── 1. Authenticate ────────────────────────────────────────────────────────
   let userId;
   let userEmail;
   try {
-    const payload = await verifyAuth(event.headers);
+    const payload = await verifyAuth(event.headers); // verify access token
     userId    = payload.sub;
-    userEmail = payload.username ?? null;
-  } catch (err) {
-    transport.send({ type: 'error', message: err.message });
+    userEmail = await extractEmail(event.headers);  // verify id token
+  } catch {
+    send({ type: 'error', message: 'Unauthorized' });
     return;
   }
 
@@ -37,16 +37,16 @@ async function runChatRequest(transport, event) {
   try {
     parsed = parseRequest(event);
   } catch (err) {
-    transport.send({ type: 'error', message: err.message });
+    send({ type: 'error', message: err.message });
     return;
   }
 
   // ── 3. Stream the chat turn ────────────────────────────────────────────────
   try {
-    await handleChatStream(transport, { ...parsed, userId, userEmail });
+    await handleChatStream(send, { ...parsed, userId, userEmail });
   } catch (err) {
     console.error('[runChatRequest] Unhandled error:', err);
-    transport.send({ type: 'error', message: 'Internal server error' });
+    send({ type: 'error', message: 'Internal server error' });
   }
 }
 

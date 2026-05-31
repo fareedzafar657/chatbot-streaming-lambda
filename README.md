@@ -277,14 +277,6 @@ Each line of the output is a JSON object: `metadata` → `userMessage` → `delt
 
 ---
 
-## Contributing
-
-1. Fork and create a feature branch: `git checkout -b feature/my-feature`
-2. Keep PRs focused — one feature or fix per PR
-3. Open an issue first for significant changes
-
----
-
 ## License
 
 [MIT](./LICENSE) © Fareed Z.

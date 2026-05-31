@@ -188,7 +188,6 @@ async function getActiveHistoryForBranch(branchId, maxMessages, maxTokenBudget) 
 module.exports = {
   MessageState,
   getOrCreateSession,
-  getBranch,
   saveUserMessage,
   saveAssistantMessage,
   getActiveHistoryForBranch,

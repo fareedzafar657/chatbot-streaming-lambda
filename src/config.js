@@ -60,7 +60,7 @@ const config = {
     allowedEmails: process.env.DEMO_MODELS_ALLOWED_EMAILS
       ? process.env.DEMO_MODELS_ALLOWED_EMAILS.split(',').map((e) => e.trim()).filter(Boolean)
       : [],
-    bedrockModels: ['anthropic.claude-sonnet-4-6'],
+    bedrockModels: ['us.anthropic.claude-sonnet-4-6'],
   },
 };
 

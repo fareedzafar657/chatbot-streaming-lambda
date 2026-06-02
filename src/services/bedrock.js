@@ -44,7 +44,6 @@ export async function* streamBedrockResponse(historyMessages, userPrompt, option
     inferenceConfig: {
       maxTokens,
       temperature: config.bedrock.temperature,
-      topP:        config.bedrock.topP,
     },
   });
 

@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * Google Gemini streaming adapter (BYOK path).
  *
@@ -13,8 +11,8 @@
  * client is bound to one user's key and must never be reused across users.
  */
 
-const { GoogleGenAI } = require('@google/genai');
-const config          = require('../config');
+import { GoogleGenAI } from '@google/genai';
+import config from '../config.js';
 
 // ─── Message format ───────────────────────────────────────────────────────────
 
@@ -28,7 +26,7 @@ function buildGeminiContents(dbMessages, userPrompt) {
 
 // ─── Streaming generator ──────────────────────────────────────────────────────
 
-async function* streamGeminiResponse(historyMessages, userPrompt, options = {}) {
+export async function* streamGeminiResponse(historyMessages, userPrompt, options = {}) {
   const { apiKey } = options;
   const modelId      = options.modelId      || config.gemini.defaultModel;
   const maxTokens    = options.maxTokens    || config.bedrock.maxTokens;
@@ -74,5 +72,3 @@ async function* streamGeminiResponse(historyMessages, userPrompt, options = {}) 
     yield { type: 'error', error: 'Gemini request failed' };
   }
 }
-
-module.exports = { streamGeminiResponse };

@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * Data access layer — sessions, branches, and messages in DynamoDB.
  *
@@ -14,15 +12,16 @@
  * The DynamoDB client is a module-level singleton reused across warm invocations.
  */
 
-const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
-const {
+import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
+import {
   DynamoDBDocumentClient,
   GetCommand,
   QueryCommand,
   PutCommand,
-} = require('@aws-sdk/lib-dynamodb');
-const { randomUUID: uuidv4 } = require('crypto');
-const config = require('../config');
+  TransactWriteCommand,
+} from '@aws-sdk/lib-dynamodb';
+import { randomUUID as uuidv4 } from 'node:crypto';
+import config from '../config.js';
 
 // ─── Client (singleton, reused across warm invocations) ─────────────────────
 const raw = new DynamoDBClient({ region: config.region });
@@ -33,7 +32,7 @@ const ddb = DynamoDBDocumentClient.from(raw, {
 const TABLES = config.dynamo;
 
 // ─── Message states ──────────────────────────────────────────────────────────
-const MessageState = {
+export const MessageState = {
   ACTIVE:    'active',
   STOPPED:   'stopped',
   EDITED:    'edited',
@@ -43,7 +42,7 @@ const MessageState = {
 
 // ─── Sessions ────────────────────────────────────────────────────────────────
 
-async function getOrCreateSession(sessionId, userId) {
+export async function getOrCreateSession(sessionId, userId) {
   const existing = await ddb.send(new GetCommand({
     TableName: TABLES.sessionsTable,
     Key: { sessionId },
@@ -90,7 +89,7 @@ async function getOrCreateSession(sessionId, userId) {
 
 // ─── Messages ────────────────────────────────────────────────────────────────
 
-async function saveUserMessage({ sessionId, branchId, content, userId }) {
+export async function saveUserMessage({ sessionId, branchId, content, userId }) {
   const msgId = `msg_${uuidv4()}`;
   const now = new Date().toISOString();
 
@@ -110,8 +109,17 @@ async function saveUserMessage({ sessionId, branchId, content, userId }) {
   return item;
 }
 
+export async function getBranch(branchId) {
+  const res = await ddb.send(new GetCommand({
+    TableName: TABLES.branchesTable,
+    Key: { branchId },
+  }));
+  if (!res.Item) throw new Error('Branch not found');
+  return res.Item;
+}
+
 // saveAssistantMessage inherits stopped state from the parent user message if it was stopped mid-flight.
-async function saveAssistantMessage({
+export async function saveAssistantMessage({
   sessionId,
   branchId,
   content,
@@ -156,7 +164,7 @@ async function saveAssistantMessage({
   return item;
 }
 
-async function getActiveHistoryForBranch(branchId, maxMessages, maxTokenBudget) {
+export async function getActiveHistoryForBranch(branchId, maxMessages, maxTokenBudget) {
   // Query messages ordered by createdAt ascending via branchId-createdAt-index GSI
   const result = await ddb.send(new QueryCommand({
     TableName:                 TABLES.messagesTable,
@@ -184,11 +192,3 @@ async function getActiveHistoryForBranch(branchId, maxMessages, maxTokenBudget) 
 
   return budgeted;
 }
-
-module.exports = {
-  MessageState,
-  getOrCreateSession,
-  saveUserMessage,
-  saveAssistantMessage,
-  getActiveHistoryForBranch,
-};

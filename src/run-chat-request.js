@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * Shared request lifecycle.
  *
@@ -14,11 +12,11 @@
  * {type:'error'} line — this function never throws.
  */
 
-const { verifyAuth, extractEmail } = require('./middleware/auth');
-const { handleChatStream }         = require('./handlers/chat');
-const { parseRequest }             = require('./utils/request');
+import { verifyAuth, extractEmail } from './middleware/auth.js';
+import { handleChatStream } from './handlers/chat.js';
+import { parseRequest } from './utils/request.js';
 
-async function runChatRequest(send, event) {
+export async function runChatRequest(send, event) {
 
   // ── 1. Authenticate ────────────────────────────────────────────────────────
   let userId;
@@ -49,5 +47,3 @@ async function runChatRequest(send, event) {
     send({ type: 'error', message: 'Internal server error' });
   }
 }
-
-module.exports = { runChatRequest };

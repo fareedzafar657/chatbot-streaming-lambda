@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * Cognito JWT verification.
  *
@@ -13,8 +11,8 @@
  * This module does NOT parse the request body — that is utils/request.js.
  */
 
-const { CognitoJwtVerifier } = require('aws-jwt-verify');
-const config = require('../config');
+import { CognitoJwtVerifier } from 'aws-jwt-verify';
+import config from '../config.js';
 
 // ─── Verifiers ────────────────────────────────────────────────────────────────
 
@@ -32,7 +30,7 @@ const idVerifier = CognitoJwtVerifier.create({
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
-async function verifyAuth(headers) {
+export async function verifyAuth(headers) {
   const authHeader = headers?.authorization || headers?.Authorization;
   if (!authHeader) {
     throw Object.assign(
@@ -53,7 +51,7 @@ async function verifyAuth(headers) {
 
 // ─── Email extraction (optional, for demo-model gating) ──────────────────────
 
-async function extractEmail(headers) {
+export async function extractEmail(headers) {
   const idToken = headers?.['x-id-token'] || headers?.['X-Id-Token'];
   if (!idToken) return null;
 
@@ -65,5 +63,3 @@ async function extractEmail(headers) {
     return null;
   }
 }
-
-module.exports = { verifyAuth, extractEmail };

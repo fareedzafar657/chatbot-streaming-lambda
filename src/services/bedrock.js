@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * AWS Bedrock streaming adapter — the default provider.
  *
@@ -13,11 +11,11 @@
  * only once the whole stream has drained.
  */
 
-const {
+import {
   BedrockRuntimeClient,
   ConverseStreamCommand,
-} = require('@aws-sdk/client-bedrock-runtime');
-const config = require('../config');
+} from '@aws-sdk/client-bedrock-runtime';
+import config from '../config.js';
 
 // Singleton client — reused across warm invocations
 const client = new BedrockRuntimeClient({ region: config.region });
@@ -29,7 +27,7 @@ function buildBedrockMessages(dbMessages) {
   }));
 }
 
-async function* streamBedrockResponse(historyMessages, userPrompt, options = {}) {
+export async function* streamBedrockResponse(historyMessages, userPrompt, options = {}) {
   const modelId      = options.modelId  || config.bedrock.modelId;
   const maxTokens    = options.maxTokens || config.bedrock.maxTokens;
   const systemPrompt = options.systemPrompt;
@@ -82,5 +80,3 @@ async function* streamBedrockResponse(historyMessages, userPrompt, options = {})
     yield { type: 'error', error: 'Model request failed' };
   }
 }
-
-module.exports = { streamBedrockResponse };

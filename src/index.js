@@ -1,6 +1,4 @@
-'use strict';
-
-const { runChatRequest } = require('./run-chat-request');
+import { runChatRequest } from './run-chat-request.js';
 
 /**
  * Lambda Function URL handler with response streaming.
@@ -24,7 +22,7 @@ const { runChatRequest } = require('./run-chat-request');
  *
  * Note: CORS is handled by Function URL configuration.
  */
-exports.handler = awslambda.streamifyResponse(async (event, responseStream) => {
+export const handler = awslambda.streamifyResponse(async (event, responseStream) => {
   const metadata = {
     statusCode: 200,
     headers: { 'Content-Type': 'application/x-ndjson' },

@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * Anthropic streaming adapter (BYOK path).
  *
@@ -12,8 +10,8 @@
  * client is bound to one user's key and must never be reused across users.
  */
 
-const Anthropic = require('@anthropic-ai/sdk');
-const config    = require('../config');
+import Anthropic from '@anthropic-ai/sdk';
+import config from '../config.js';
 
 // ─── Message format ───────────────────────────────────────────────────────────
 
@@ -24,7 +22,7 @@ function buildAnthropicMessages(dbMessages, userPrompt) {
 
 // ─── Streaming generator ──────────────────────────────────────────────────────
 
-async function* streamAnthropicResponse(historyMessages, userPrompt, options = {}) {
+export async function* streamAnthropicResponse(historyMessages, userPrompt, options = {}) {
   const { apiKey } = options;
   const modelId      = options.modelId      || config.anthropic.defaultModel;
   const maxTokens    = options.maxTokens    || config.bedrock.maxTokens;
@@ -60,5 +58,3 @@ async function* streamAnthropicResponse(historyMessages, userPrompt, options = {
     yield { type: 'error', error: 'Anthropic request failed' };
   }
 }
-
-module.exports = { streamAnthropicResponse };

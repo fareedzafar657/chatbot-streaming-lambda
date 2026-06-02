@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * Chat turn orchestrator — the heart of a request.
  *
@@ -14,11 +12,11 @@
  * that lives in services/.
  */
 
-const { streamBedrockResponse }   = require('../services/bedrock');
-const { streamAnthropicResponse } = require('../services/anthropic');
-const { streamGeminiResponse }    = require('../services/gemini');
-const db                          = require('../services/dynamodb');
-const config                      = require('../config');
+import { streamBedrockResponse } from '../services/bedrock.js';
+import { streamAnthropicResponse } from '../services/anthropic.js';
+import { streamGeminiResponse } from '../services/gemini.js';
+import * as db from '../services/dynamodb.js';
+import config from '../config.js';
 
 // ─── Model resolution ──────────────────────────────────────────────────────────
 
@@ -55,7 +53,7 @@ function resolveModel({ apiKey, provider, model, userEmail }) {
 
 // ─── Chat turn ─────────────────────────────────────────────────────────────────
 
-async function handleChatStream(send, { prompt, sessionId, branchId, userId, userEmail, apiKey, provider, model, systemPrompt }) {
+export async function handleChatStream(send, { prompt, sessionId, branchId, userId, userEmail, apiKey, provider, model, systemPrompt }) {
 
   // ── 1. Resolve session + branch ──────────────────────────────────────────
   const session = await db.getOrCreateSession(sessionId, userId);
@@ -186,5 +184,3 @@ async function handleChatStream(send, { prompt, sessionId, branchId, userId, use
     send({ type: 'done', msgId: null, inputTokens, outputTokens });
   }
 }
-
-module.exports = { handleChatStream };

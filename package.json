@@ -1,6 +1,7 @@
 {
   "name": "chatbot-streaming-lambda",
   "version": "1.0.0",
+  "type": "module",
   "main": "src/index.js",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.96.0",

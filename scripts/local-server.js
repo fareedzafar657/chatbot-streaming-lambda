@@ -1,6 +1,4 @@
-'use strict';
-
-require('dotenv').config();
+import 'dotenv/config';
 
 /**
  * Local HTTP server that wraps the Lambda handler for frontend dev.
@@ -14,8 +12,8 @@ require('dotenv').config();
  * request body. Auth, parsing, and streaming live in run-chat-request.js.
  */
 
-const http               = require('http');
-const { runChatRequest } = require('../src/run-chat-request');
+import http from 'node:http';
+import { runChatRequest } from '../src/run-chat-request.js';
 
 const PORT = process.env.PORT || 4000;
 

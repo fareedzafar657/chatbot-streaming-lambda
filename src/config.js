@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * Centralised configuration — the single source of truth for every tunable.
  *
@@ -69,4 +67,4 @@ const config = {
 if (!config.cognito.userPoolId) throw new Error('COGNITO_USER_POOL_ID env var is required');
 if (!config.cognito.clientId)   throw new Error('COGNITO_CLIENT_ID env var is required');
 
-module.exports = config;
+export default config;
